@@ -25,10 +25,11 @@ fn app() -> ! {
 }
 ```
 
-**AP mode is verified on hardware** (Sipeed M0S Dock): a laptop associated
-over WPA2-PSK, took `192.168.4.2` from the on-board DHCP server, and pinged
-`192.168.4.1` with 5/5 replies at ~2.9 ms. STA is implemented but has not yet
-been run against a real AP.
+**Both modes are verified on hardware** (Sipeed M0S Dock). AP: a laptop
+associated over WPA2-PSK, took `192.168.4.2` from the on-board DHCP server,
+and pinged `192.168.4.1` 5/5 at ~2.9 ms. STA: joined a WPA2 network with a
+full EAPOL 1-4 handshake, took `192.168.87.22/24` by DHCP, answered 6/6 pings
+and held -48 dBm.
 
 This is a safe Rust surface over Bouffalo's WiFi stack, not a from-scratch
 driver — the 802.11 MAC and PHY ship only as blobs. the engineering notes is
@@ -124,8 +125,9 @@ bl616_wifi::event::set_handler(|event, value| println!("[event] {event:?} ({valu
 `hello` but not `ap`, the fault is in the radio path; `bringup` then names the
 exact call that fails. See "Debugging lessons" in the engineering notes — in
 particular that a running BL616 does *not* answer as `349b:6160`, and that you
-must read the CDC console with plain `cat` (setting a baud rate wedges the
-port and makes a healthy board look dead).
+must read the CDC console with plain `cat` plus
+`stty -F /dev/ttyACM0 -echo` — *without* a baud rate, which wedges the port
+and makes a healthy board look dead.
 
 ## Using it from your own crate
 
