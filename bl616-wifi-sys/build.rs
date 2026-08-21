@@ -331,6 +331,7 @@ fn emit_link_args(link_txt: &Path, build_dir: &Path, out_dir: &Path) {
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", link_txt.display()));
 
     let tokens = shell_split(&line);
+    let drop_c_net = env::var_os("CARGO_FEATURE_RUST_NET").is_some();
     let mut args = Vec::new();
     let mut skip_next = false;
 
@@ -351,6 +352,14 @@ fn emit_link_args(link_txt: &Path, build_dir: &Path, out_dir: &Path) {
         // --cref only makes sense alongside that map, and without it the
         // cross-reference table drowns any real linker error.
         if tok.starts_with("-Wl,-Map=") || tok == "-Wl,--cref" {
+            continue;
+        }
+        // Stage 1: hold back the C network stack so Rust can replace it.
+        if drop_c_net
+            && ["libwifi6_lwip_adapter.a", "liblwip.a"]
+                .iter()
+                .any(|a| tok.ends_with(a))
+        {
             continue;
         }
         // Archive paths are relative to the CMake build directory, and the
