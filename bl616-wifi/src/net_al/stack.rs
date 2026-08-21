@@ -22,7 +22,7 @@
 //! or soft-AP replies to ping as soon as it has an address. That is the
 //! cheapest end-to-end proof the whole path works.
 
-use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 use smoltcp::iface::{Config, Interface, SocketSet};
 use smoltcp::phy::{self, Checksum, DeviceCapabilities, Medium};
@@ -63,6 +63,13 @@ static DHCPD_POOL: AtomicU32 = AtomicU32::new(0);
 /// Set once the poll task is running, so requests made before that fail fast
 /// rather than hanging.
 static RUNNING: AtomicU32 = AtomicU32::new(0);
+/// Interface the blob has named, or 0 for "not yet told".
+///
+/// Binding to whichever interface merely exists first is wrong: the station
+/// registers before the soft-AP, so an AP-mode DHCP request would be answered
+/// against the station's (unset) address.
+static TARGET_IF: AtomicUsize = AtomicUsize::new(0);
+
 /// Claimed by whoever spawns the poll task.
 ///
 /// Separate from [`RUNNING`], which the task sets only once it is scheduled:
@@ -100,6 +107,12 @@ pub fn request(cmd: Command, timeout_ms: u32) -> bool {
         waited += 10;
     }
     false
+}
+
+/// Name the interface the stack should serve. The blob knows which one it
+/// means; we should not guess.
+pub fn set_target(net_if: *mut core::ffi::c_void) {
+    TARGET_IF.store(net_if as usize, Ordering::Release);
 }
 
 /// Set the soft-AP DHCP pool before requesting [`Command::DhcpServerStart`].
@@ -364,8 +377,21 @@ extern "C" fn poll_task(_arg: *mut core::ffi::c_void) {
     RUNNING.store(1, Ordering::Release);
 
     loop {
+        // Rebind if the blob has named an interface other than the one we are
+        // serving.
+        let target = TARGET_IF.load(Ordering::Acquire) as *mut NetIf;
+        if !target.is_null()
+            && stack.as_ref().map(|s: &Stack| s.net_if) != Some(target)
+            && iface::index_of(target).is_some()
+        {
+            stack = None;
+        }
+
         if stack.is_none() {
-            if let Some(p) = iface::designated() {
+            if let Some(p) = (!target.is_null())
+                .then_some(target)
+                .or_else(iface::designated)
+            {
                 let mac = unsafe { (*p).mac };
                 let mut s = Stack::new(p, mac);
                 let (addr, mask, gw) = unsafe {
@@ -427,6 +453,22 @@ extern "C" fn poll_task(_arg: *mut core::ffi::c_void) {
             && stack.poll_dhcp_client()
         {
             RESULT.store(RESULT_OK, Ordering::Release);
+        }
+
+        #[cfg(feature = "net-trace")]
+        {
+            static TICK: AtomicU32 = AtomicU32::new(0);
+            if TICK.fetch_add(1, Ordering::Relaxed) % 400 == 0 {
+                let (tx, peak, dry, rx, drop) = super::stats();
+                crate::println!(
+                    "[net_al] tx_inflight={} peak={} exhausted={} rx={} dropped={}",
+                    tx,
+                    peak,
+                    dry,
+                    rx,
+                    drop
+                );
+            }
         }
 
         // 5 ms keeps ping latency respectable without spinning; smoltcp's own

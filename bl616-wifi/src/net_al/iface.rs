@@ -142,6 +142,13 @@ pub fn find_by_name(name: &[u8]) -> Option<*mut NetIf> {
     None
 }
 
+/// Which slot a handle refers to.
+pub fn index_of(p: *mut NetIf) -> Option<usize> {
+    let offset = (p as usize).wrapping_sub(iface_base() as usize);
+    let stride = core::mem::size_of::<NetIf>();
+    (offset % stride == 0 && offset / stride < MAX_IF).then_some(offset / stride)
+}
+
 /// The interface in slot `idx`, if it has been registered.
 ///
 /// The blob registers the station first and the soft-AP second, so the index

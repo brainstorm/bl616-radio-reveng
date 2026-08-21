@@ -42,6 +42,21 @@
 // `# Safety` section on each of thirty functions would add noise, not safety.
 #![allow(clippy::missing_safety_doc)]
 
+/// Report a data-path call, but only the first few -- tracing every frame
+/// floods the console and changes the timing being investigated.
+#[cfg(feature = "net-trace")]
+pub(crate) fn trace_budget(counter: &core::sync::atomic::AtomicU32) -> bool {
+    counter.fetch_add(1, Ordering::Relaxed) < 6
+}
+
+/// Report a `net_al` call, with the `net-trace` feature.
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        #[cfg(feature = "net-trace")]
+        $crate::println!($($arg)*);
+    };
+}
+
 pub mod dhcpd;
 pub mod iface;
 pub mod stack;
@@ -147,6 +162,17 @@ pub unsafe extern "C" fn net_if_add(
         }
         *net_if = p as *mut c_void;
     }
+    trace!(
+        "[net_al] if_add slot={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ip={:08x}",
+        iface::index_of(p).unwrap_or(255),
+        mac[0],
+        mac[1],
+        mac[2],
+        mac[3],
+        mac[4],
+        mac[5],
+        unsafe { (*p).ipaddr.load(Ordering::Acquire) }
+    );
     // The stack needs the interface's MAC, so it cannot start any earlier.
     stack::start();
     0
@@ -212,6 +238,7 @@ pub unsafe extern "C" fn net_if_vif_info(net_if: *mut c_void) -> *mut c_void {
 
 #[no_mangle]
 pub unsafe extern "C" fn net_if_up_cb(net_if: *mut c_void) {
+    trace!("[net_al] if_up");
     if let Some(i) = iface::validate(net_if) {
         i.link_up.store(true, Ordering::Release);
     }
@@ -228,6 +255,7 @@ pub unsafe extern "C" fn net_if_down_cb(net_if: *mut c_void) {
 /// nothing to do here beyond acknowledging it.
 #[no_mangle]
 pub unsafe extern "C" fn net_al_link_set(net_if: *mut c_void) -> c_int {
+    trace!("[net_al] link_set");
     if iface::validate(net_if).is_some() {
         0
     } else {
@@ -312,6 +340,19 @@ pub unsafe extern "C" fn net_buf_tx_info(
         return core::ptr::null_mut();
     }
 
+    #[cfg(feature = "net-trace")]
+    if trace_budget(&TRACE_TX_INFO) {
+        let hr = unsafe { (*first).headroom_ptr() } as u32;
+        let fr = unsafe { (*first).frame_ptr() } as u32;
+        crate::println!(
+            "[net_al] tx_info segs={} tot={} frame={:08x} headroom={:08x} delta={:08x}",
+            idx,
+            total,
+            fr,
+            hr,
+            hr.wrapping_sub(fr)
+        );
+    }
     unsafe {
         *seg_cnt = idx as c_int;
         if !tot_len.is_null() {
@@ -389,7 +430,21 @@ pub struct TxReq {
 ///
 /// Passed by value, matching `int net_al_tx_req(struct net_al_tx_req req)`.
 #[no_mangle]
+#[cfg(feature = "net-trace")]
+static TRACE_TX_REQ: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "net-trace")]
+static TRACE_TX_INFO: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "net-trace")]
+static TRACE_L2: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "net-trace")]
+static TRACE_RX: AtomicU32 = AtomicU32::new(0);
+
+#[no_mangle]
 pub unsafe extern "C" fn net_al_tx_req(req: TxReq) -> c_int {
+    #[cfg(feature = "net-trace")]
+    if trace_budget(&TRACE_TX_REQ) {
+        crate::println!("[net_al] tx_req type={} buf={:p}", req.type_, req.net_buf);
+    }
     if req.net_buf.is_null() {
         return -1;
     }
@@ -425,6 +480,10 @@ pub unsafe extern "C" fn net_al_input(
     _skip_after_eth_hdr: u8,
     free_fn: Option<unsafe extern "C" fn(*mut c_void)>,
 ) {
+    #[cfg(feature = "net-trace")]
+    if trace_budget(&TRACE_RX) {
+        crate::println!("[net_al] rx len={} off={}", length, offset);
+    }
     if let Some(_i) = iface::validate(net_if) {
         if !payload.is_null() && length > 0 {
             let frame = unsafe { (payload as *const u8).add(offset as usize) };
@@ -491,6 +550,14 @@ pub unsafe extern "C" fn net_l2_send(
     dst_addr: *const u8,
     ack: *mut bool,
 ) -> c_int {
+    #[cfg(feature = "net-trace")]
+    if trace_budget(&TRACE_L2) {
+        crate::println!(
+            "[net_al] l2_send ethertype={:04x} len={}",
+            ethertype,
+            data_len
+        );
+    }
     let Some(i) = iface::validate(net_if) else {
         return -1;
     };
@@ -549,6 +616,12 @@ pub unsafe extern "C" fn net_al_ext_set_vif_ip(fvif_idx: c_int, cfg: *mut IpAddr
         return -1;
     };
     let cfg = unsafe { &*cfg };
+    trace!(
+        "[net_al] set_vif_ip idx={} mode={} addr={:08x}",
+        fvif_idx,
+        cfg.mode,
+        cfg.u[0]
+    );
     match cfg.mode {
         IP_ADDR_STATIC_IPV4 => {
             let (addr, mask, gw, dns) = cfg.ipv4();
@@ -626,11 +699,17 @@ pub extern "C" fn net_al_ext_dhcp_disconnect() {
 /// Start the soft-AP's DHCP server. See [`dhcpd`].
 #[no_mangle]
 pub extern "C" fn net_al_dhcpd_start(net_if: *mut c_void, start: c_int, limit: c_int) -> c_int {
+    trace!("[net_al] dhcpd_start start={} limit={}", start, limit);
     if iface::validate(net_if).is_none() {
+        trace!("[net_al] dhcpd_start: bad interface handle");
         return -1;
     }
+    // Bind the stack to the interface the blob actually named.
+    stack::set_target(net_if);
     stack::set_dhcpd_pool(start.max(0) as u16, limit.max(0) as u16);
-    if stack::request(stack::Command::DhcpServerStart, 5_000) {
+    let ok = stack::request(stack::Command::DhcpServerStart, 5_000);
+    trace!("[net_al] dhcpd_start -> {}", if ok { 0 } else { -1 });
+    if ok {
         0
     } else {
         -1
