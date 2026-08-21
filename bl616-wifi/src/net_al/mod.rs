@@ -42,19 +42,28 @@
 // `# Safety` section on each of thirty functions would add noise, not safety.
 #![allow(clippy::missing_safety_doc)]
 
-/// Report a data-path call, but only the first few -- tracing every frame
-/// floods the console and changes the timing being investigated.
-#[cfg(feature = "net-trace")]
-pub(crate) fn trace_budget(counter: &core::sync::atomic::AtomicU32) -> bool {
-    counter.fetch_add(1, Ordering::Relaxed) < 6
-}
-
 /// Report a `net_al` call, with the `net-trace` feature.
 macro_rules! trace {
     ($($arg:tt)*) => {
         #[cfg(feature = "net-trace")]
         $crate::println!($($arg)*);
     };
+}
+
+/// Report the first few calls at this site and then stay quiet.
+///
+/// The data path would otherwise flood the console and change the timing of
+/// the thing being investigated. Each call site gets its own budget.
+macro_rules! trace_n {
+    ($($arg:tt)*) => {{
+        #[cfg(feature = "net-trace")]
+        {
+            static N: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 5 {
+                $crate::println!($($arg)*);
+            }
+        }
+    }};
 }
 
 pub mod dhcpd;
@@ -103,6 +112,7 @@ impl IpAddrCfg {
 /// Initialise the network stack. Called by the blob before any interface.
 #[no_mangle]
 pub extern "C" fn net_init() -> c_int {
+    trace!("[net_al] net_init");
     0
 }
 
@@ -190,6 +200,7 @@ pub unsafe extern "C" fn net_if_get_mac_addr(net_if: *mut c_void) -> *const u8 {
 
 #[no_mangle]
 pub unsafe extern "C" fn net_if_find_from_name(name: *const c_char) -> *mut c_void {
+    trace!("[net_al] find_from_name");
     if name.is_null() {
         return core::ptr::null_mut();
     }
@@ -230,6 +241,7 @@ pub unsafe extern "C" fn net_if_get_name(
 /// The blob's per-VIF private pointer, handed back unchanged.
 #[no_mangle]
 pub unsafe extern "C" fn net_if_vif_info(net_if: *mut c_void) -> *mut c_void {
+    trace_n!("[net_al] vif_info");
     match iface::validate(net_if) {
         Some(i) => i.vif_priv,
         None => core::ptr::null_mut(),
@@ -246,6 +258,7 @@ pub unsafe extern "C" fn net_if_up_cb(net_if: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn net_if_down_cb(net_if: *mut c_void) {
+    trace!("[net_al] if_down");
     if let Some(i) = iface::validate(net_if) {
         i.link_up.store(false, Ordering::Release);
     }
@@ -267,6 +280,7 @@ pub unsafe extern "C" fn net_al_link_set(net_if: *mut c_void) -> c_int {
 
 #[no_mangle]
 pub extern "C" fn net_buf_tx_alloc(length: u32) -> *mut c_void {
+    trace_n!("[net_al] tx_alloc len={}", length);
     match txbuf::alloc() {
         Some(b) if length as usize <= txbuf::MAX_FRAME => {
             unsafe { (*b).len = length as u16 };
@@ -282,6 +296,7 @@ pub extern "C" fn net_buf_tx_alloc(length: u32) -> *mut c_void {
 
 #[no_mangle]
 pub unsafe extern "C" fn net_buf_tx_alloc_fill(frame: *const u8, length: u32) -> *mut c_void {
+    trace_n!("[net_al] tx_alloc_fill len={}", length);
     match unsafe { txbuf::alloc_fill(frame, length as usize) } {
         Some(b) => b as *mut c_void,
         None => core::ptr::null_mut(),
@@ -340,19 +355,14 @@ pub unsafe extern "C" fn net_buf_tx_info(
         return core::ptr::null_mut();
     }
 
-    #[cfg(feature = "net-trace")]
-    if trace_budget(&TRACE_TX_INFO) {
-        let hr = unsafe { (*first).headroom_ptr() } as u32;
-        let fr = unsafe { (*first).frame_ptr() } as u32;
-        crate::println!(
-            "[net_al] tx_info segs={} tot={} frame={:08x} headroom={:08x} delta={:08x}",
-            idx,
-            total,
-            fr,
-            hr,
-            hr.wrapping_sub(fr)
-        );
-    }
+    trace_n!(
+        "[net_al] tx_info segs={} tot={} frame={:08x} delta={:08x}",
+        idx,
+        total,
+        unsafe { (*first).frame_ptr() } as u32,
+        (unsafe { (*first).headroom_ptr() } as u32)
+            .wrapping_sub(unsafe { (*first).frame_ptr() } as u32)
+    );
     unsafe {
         *seg_cnt = idx as c_int;
         if !tot_len.is_null() {
@@ -377,6 +387,7 @@ pub extern "C" fn net_buf_tx_all_shram(_net_buf: *mut c_void) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn net_buf_tx_free(buf: *mut c_void) {
+    trace_n!("[net_al] tx_free");
     if !buf.is_null() {
         unsafe { txbuf::free(buf as *mut TxBuf) };
     }
@@ -385,6 +396,7 @@ pub unsafe extern "C" fn net_buf_tx_free(buf: *mut c_void) {
 /// Chain a second buffer onto the first as an extra segment.
 #[no_mangle]
 pub unsafe extern "C" fn net_buf_tx_cat(first: *mut c_void, second: *mut c_void) {
+    trace_n!("[net_al] tx_cat");
     if first.is_null() || second.is_null() {
         return;
     }
@@ -400,12 +412,16 @@ pub unsafe extern "C" fn net_buf_tx_cat(first: *mut c_void, second: *mut c_void)
 // ------------------------------------------------------------------ TX path
 
 #[no_mangle]
-pub extern "C" fn net_al_tx_init() {}
+pub extern "C" fn net_al_tx_init() {
+    trace!("[net_al] tx_init");
+}
 
 /// Transmission confirmed. Buffers are released through the confirmation
 /// callback the submitter supplied, so there is nothing to reclaim here.
 #[no_mangle]
-pub extern "C" fn net_al_tx_cfm() {}
+pub extern "C" fn net_al_tx_cfm() {
+    trace_n!("[net_al] tx_cfm");
+}
 
 /// A station went away; release anything queued for it.
 ///
@@ -430,21 +446,8 @@ pub struct TxReq {
 ///
 /// Passed by value, matching `int net_al_tx_req(struct net_al_tx_req req)`.
 #[no_mangle]
-#[cfg(feature = "net-trace")]
-static TRACE_TX_REQ: AtomicU32 = AtomicU32::new(0);
-#[cfg(feature = "net-trace")]
-static TRACE_TX_INFO: AtomicU32 = AtomicU32::new(0);
-#[cfg(feature = "net-trace")]
-static TRACE_L2: AtomicU32 = AtomicU32::new(0);
-#[cfg(feature = "net-trace")]
-static TRACE_RX: AtomicU32 = AtomicU32::new(0);
-
-#[no_mangle]
 pub unsafe extern "C" fn net_al_tx_req(req: TxReq) -> c_int {
-    #[cfg(feature = "net-trace")]
-    if trace_budget(&TRACE_TX_REQ) {
-        crate::println!("[net_al] tx_req type={} buf={:p}", req.type_, req.net_buf);
-    }
+    trace_n!("[net_al] tx_req type={} buf={:p}", req.type_, req.net_buf);
     if req.net_buf.is_null() {
         return -1;
     }
@@ -480,10 +483,7 @@ pub unsafe extern "C" fn net_al_input(
     _skip_after_eth_hdr: u8,
     free_fn: Option<unsafe extern "C" fn(*mut c_void)>,
 ) {
-    #[cfg(feature = "net-trace")]
-    if trace_budget(&TRACE_RX) {
-        crate::println!("[net_al] rx len={} off={}", length, offset);
-    }
+    trace_n!("[net_al] rx len={} off={}", length, offset);
     if let Some(_i) = iface::validate(net_if) {
         if !payload.is_null() && length > 0 {
             let frame = unsafe { (payload as *const u8).add(offset as usize) };
@@ -516,6 +516,7 @@ pub extern "C" fn net_al_rx_resend(
 /// Register interest in a raw ethertype. The supplicant uses this for EAPOL.
 #[no_mangle]
 pub unsafe extern "C" fn net_l2_socket_create(net_if: *mut c_void, ethertype: u16) -> c_int {
+    trace!("[net_al] l2_socket_create ethertype={:04x}", ethertype);
     match iface::validate(net_if) {
         Some(i) => {
             i.l2_ethertype.store(ethertype as u32, Ordering::Release);
@@ -550,14 +551,11 @@ pub unsafe extern "C" fn net_l2_send(
     dst_addr: *const u8,
     ack: *mut bool,
 ) -> c_int {
-    #[cfg(feature = "net-trace")]
-    if trace_budget(&TRACE_L2) {
-        crate::println!(
-            "[net_al] l2_send ethertype={:04x} len={}",
-            ethertype,
-            data_len
-        );
-    }
+    trace_n!(
+        "[net_al] l2_send ethertype={:04x} len={}",
+        ethertype,
+        data_len
+    );
     let Some(i) = iface::validate(net_if) else {
         return -1;
     };
@@ -659,6 +657,7 @@ pub unsafe extern "C" fn net_al_ext_set_vif_ip(fvif_idx: c_int, cfg: *mut IpAddr
 
 #[no_mangle]
 pub unsafe extern "C" fn net_al_ext_get_vif_ip(fvif_idx: c_int, cfg: *mut IpAddrCfg) -> c_int {
+    trace_n!("[net_al] get_vif_ip idx={}", fvif_idx);
     if cfg.is_null() {
         return -1;
     }
@@ -724,6 +723,7 @@ pub extern "C" fn net_al_dhcpd_stop(_net_if: *mut c_void) -> c_int {
 
 #[no_mangle]
 pub extern "C" fn net_al_set_ipv6_enable(enable: c_int) -> c_int {
+    trace!("[net_al] set_ipv6 {}", enable);
     IPV6_ENABLED.store(enable as u32, Ordering::Release);
     if enable != 0 {
         -1
