@@ -66,6 +66,11 @@ pub mod runtime;
 pub mod shell;
 pub mod sta;
 
+/// Rust implementation of the vendor stack's network interface, replacing
+/// lwIP. See the module docs and the engineering notes for what is done and what is not.
+#[cfg(feature = "rust-net")]
+pub mod net_al;
+
 #[cfg(feature = "alloc")]
 mod heap;
 

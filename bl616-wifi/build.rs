@@ -14,6 +14,52 @@
 
 use std::{env, fs};
 
+/// Entry points the vendor blobs call into, which must survive
+/// `--gc-sections`.
+///
+/// The vendor's own implementations live in a `--whole-archive` C object and
+/// are anchored by references the linker can see. Ours are `#[no_mangle]`
+/// functions in a Rust rlib, and the linker will happily prune any of them it
+/// cannot see a *live* reference to — which silently deleted
+/// `net_buf_tx_info` and `net_if_vif_info`, i.e. the whole TX description
+/// path, while still linking successfully. `--undefined` makes each one a GC
+/// root, the same trick the vendor link line uses for `fw_header`.
+const NET_AL_EXPORTS: &[&str] = &[
+    "net_init",
+    "net_ip_chksum",
+    "net_if_add",
+    "net_if_get_mac_addr",
+    "net_if_find_from_name",
+    "net_if_get_name",
+    "net_if_vif_info",
+    "net_if_up_cb",
+    "net_if_down_cb",
+    "net_al_link_set",
+    "net_buf_tx_alloc",
+    "net_buf_tx_alloc_fill",
+    "net_buf_tx_alloc_ref",
+    "net_buf_tx_info",
+    "net_buf_tx_all_shram",
+    "net_buf_tx_free",
+    "net_buf_tx_cat",
+    "net_al_tx_init",
+    "net_al_tx_cfm",
+    "net_al_tx_do_sta_del",
+    "net_al_tx_req",
+    "net_al_input",
+    "net_al_rx_resend",
+    "net_l2_send",
+    "net_l2_socket_create",
+    "net_l2_socket_delete",
+    "net_al_ext_set_vif_ip",
+    "net_al_ext_get_vif_ip",
+    "net_al_ext_dhcp_connect",
+    "net_al_ext_dhcp_disconnect",
+    "net_al_dhcpd_start",
+    "net_al_dhcpd_stop",
+    "net_al_set_ipv6_enable",
+];
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -26,5 +72,11 @@ fn main() {
 
     for arg in args.lines().filter(|l| !l.is_empty()) {
         println!("cargo:rustc-link-arg={arg}");
+    }
+
+    if env::var_os("CARGO_FEATURE_RUST_NET").is_some() {
+        for sym in NET_AL_EXPORTS {
+            println!("cargo:rustc-link-arg=-Wl,--undefined={sym}");
+        }
     }
 }

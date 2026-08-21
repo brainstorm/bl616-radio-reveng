@@ -181,6 +181,13 @@ fn build_csdk(project_dir: &Path, sdk: &Path, toolchain_bin: &Path, chip: &str, 
 
     // BouffaloSDK collects every CONFIG_* make variable, command-line ones
     // included, so features can extend defconfig without editing it.
+    // Stage 1: `ping` is a pure lwIP-socket consumer and is the single
+    // biggest source of lwIP symbols outside the radio path. Drop it with the
+    // stack it depends on.
+    if env::var_os("CARGO_FEATURE_RUST_NET").is_some() {
+        configure.args(["CONFIG_PING=n", "CONFIG_WIFI_IPERF=n"]);
+    }
+
     if env::var_os("CARGO_FEATURE_USB_CONSOLE").is_some() {
         configure.args([
             "CONFIG_BSP_CONSOLE_USB_CDC=y",

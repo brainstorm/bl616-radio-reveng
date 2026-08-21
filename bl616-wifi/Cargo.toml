@@ -15,6 +15,16 @@ keywords = ["bl616", "bouffalo", "wifi", "riscv", "embedded"]
 
 [dependencies]
 bl616-wifi-sys = { path = "../bl616-wifi-sys", version = "0.1.0" }
+smoltcp = { version = "0.14", optional = true, default-features = false, features = [
+    "alloc",
+    "medium-ethernet",
+    "proto-ipv4",
+    "proto-dhcpv4",
+    "socket-udp",
+    "socket-tcp",
+    "socket-dhcpv4",
+    "socket-icmp",
+] }
 
 [features]
 default = ["alloc", "panic-handler"]
@@ -26,7 +36,7 @@ panic-handler = []
 usb-console = ["bl616-wifi-sys/usb-console"]
 # Stage 1 of the pure-Rust roadmap: drop lwIP and the vendor net_al adapter so
 # a Rust stack can replace them. Does not link yet -- see the engineering notes.
-rust-net = ["bl616-wifi-sys/rust-net"]
+rust-net = ["bl616-wifi-sys/rust-net", "dep:smoltcp", "alloc"]
 
 [[example]]
 name = "hello"
