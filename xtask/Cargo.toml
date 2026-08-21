@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Roman Valls Guimera <brainstorm@nopcode.org>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "xtask"
+description = "Build, image and flash helper for bl616-wifi"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Deliberately dependency-free: this runs on the host, and every crate added
+# here is a crate that has to build before you can flash a board.
+[dependencies]
+
+[workspace]

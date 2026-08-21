@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Roman Valls Guimera <brainstorm@nopcode.org>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "bl616-wifi-sys"
+description = "Raw FFI bindings to the Bouffalo BL616 WiFi 6 stack (fhost/macsw/phyrf) plus its FreeRTOS + lwIP substrate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+links = "bl616_wifi_csdk"
+build = "build.rs"
+
+[features]
+# Put the console on the BL616's own USB peripheral (CherryUSB CDC-ACM)
+# instead of UART0. On boards whose USB-C goes straight into the chip — the
+# Sipeed M0S Dock, for one — this is the difference between needing an
+# external TTL-USB adapter and needing nothing at all.
+usb-console = []
+
+[build-dependencies]
+bindgen = "0.72.1"
+
+[lints.rust]
+# bindgen output is not our style problem
+non_upper_case_globals = "allow"
+non_camel_case_types = "allow"
+non_snake_case = "allow"

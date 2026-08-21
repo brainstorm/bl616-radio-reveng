@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Roman Valls Guimera <brainstorm@nopcode.org>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[build]
+# BL616 is a T-Head E907: RV32IMAFCP with the *ilp32f* ABI. That last bit
+# matters — every Bouffalo WiFi blob is built -mabi=ilp32f, so riscv32imac
+# (ilp32, soft-float ABI) will not link against them.
+target = "riscv32imafc-unknown-none-elf"
+
+[target.riscv32imafc-unknown-none-elf]
+# The vendor archives are GCC-LTO (GIMPLE) objects, so the GCC driver has to
+# run the link — rust-lld cannot load GCC's LTO plugin.
+linker = "riscv64-unknown-elf-gcc"
+rustflags = [
+    "-C", "linker-flavor=gcc",
+    # The target spec says "lld", so the GCC driver is handed -fuse-ld=lld.
+    # The vendor archives are GCC-LTO, which only GNU ld can consume via the
+    # LTO plugin; the last -fuse-ld on the command line wins.
+    "-C", "link-arg=-fuse-ld=bfd",
+    # binutils 2.35 (GCC 10.2) cannot parse the Tag_RISCV_arch string LLVM
+    # emits (zmmul/zaamo/zalrsc/zca/zcf). The ELF e_flags *do* agree
+    # (0x3 = RVC + single-float ABI), so downgrade the attribute merge to a
+    # warning instead of rewriting every object.
+    "-C", "link-arg=-Wl,--no-warn-mismatch",
+]
+
+[alias]
+xtask = "run --quiet --manifest-path xtask/Cargo.toml --target x86_64-unknown-linux-gnu --release --"

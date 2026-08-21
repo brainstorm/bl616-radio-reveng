@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Roman Valls Guimera <brainstorm@nopcode.org>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[workspace]
+resolver = "2"
+members = ["bl616-wifi-sys", "bl616-wifi"]
+# xtask is a *host* crate and lives in its own workspace so that the
+# riscv32 default target in .cargo/config.toml does not apply to it.
+exclude = ["xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/brainstorm/bl616-radio-reveng"
+rust-version = "1.85"
+
+[profile.release]
+opt-level = "s"
+lto = false          # C side is GCC-LTO; keep the Rust side plain ELF
+debug = 2
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+opt-level = "s"      # -O0 Rust + 480 KiB SRAM is a bad combination
+panic = "abort"

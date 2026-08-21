@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Roman Valls Guimera <brainstorm@nopcode.org>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "bl616-wifi"
+description = "WPA2 station and access-point WiFi for the Bouffalo BL616, in Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+categories = ["embedded", "no-std", "hardware-support"]
+keywords = ["bl616", "bouffalo", "wifi", "riscv", "embedded"]
+
+[dependencies]
+bl616-wifi-sys = { path = "../bl616-wifi-sys", version = "0.1.0" }
+
+[features]
+default = ["alloc", "panic-handler"]
+# Route Rust's global allocator at the SDK's TLSF heap.
+alloc = []
+# Provide a #[panic_handler] that prints to the console and halts.
+panic-handler = []
+# Console over USB-CDC on the chip's own USB peripheral rather than UART0.
+usb-console = ["bl616-wifi-sys/usb-console"]
+
+[[example]]
+name = "hello"
+required-features = ["panic-handler"]
+
+[[example]]
+name = "bringup"
+required-features = ["panic-handler"]
+
+[[example]]
+name = "sta"
+required-features = ["panic-handler"]
+
+[[example]]
+name = "ap"
+required-features = ["panic-handler"]
