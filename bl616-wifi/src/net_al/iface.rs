@@ -142,10 +142,37 @@ pub fn find_by_name(name: &[u8]) -> Option<*mut NetIf> {
     None
 }
 
+/// The interface in slot `idx`, if it has been registered.
+///
+/// The blob registers the station first and the soft-AP second, so the index
+/// it passes as `fvif_idx` maps straight onto a slot.
+pub fn by_index(idx: usize) -> Option<*mut NetIf> {
+    if idx >= MAX_IF {
+        return None;
+    }
+    let p = unsafe { iface_base().add(idx) };
+    unsafe { &*p }.used.load(Ordering::Acquire).then_some(p)
+}
+
 /// The station interface, which is slot 0 once it exists.
 pub fn primary() -> Option<*mut NetIf> {
-    let p = iface_base();
-    unsafe { &*p }.used.load(Ordering::Acquire).then_some(p)
+    by_index(0)
+}
+
+/// The interface an IP stack should bind to: whichever has an address
+/// configured, else the first registered one.
+///
+/// AP mode configures slot 1, so binding blindly to slot 0 leaves the DHCP
+/// server looking at 0.0.0.0.
+pub fn designated() -> Option<*mut NetIf> {
+    for i in 0..MAX_IF {
+        if let Some(p) = by_index(i) {
+            if unsafe { &*p }.ipaddr.load(Ordering::Acquire) != 0 {
+                return Some(p);
+            }
+        }
+    }
+    (0..MAX_IF).find_map(by_index)
 }
 
 // ------------------------------------------------------------------ RX ring

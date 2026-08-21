@@ -31,6 +31,12 @@ pub const APP_PRIORITY: u32 = 5;
 pub const RADIO_STACK_WORDS: u32 = 2048;
 /// Priority of the radio bring-up task, matching the vendor's.
 pub const RADIO_PRIORITY: u32 = 10;
+/// How long to wait for a USB-CDC host to enumerate before printing anything.
+///
+/// Only used with the `usb-console` feature, where earlier output is dropped
+/// rather than buffered.
+#[cfg(feature = "usb-console")]
+pub const CONSOLE_SETTLE_MS: u32 = 2_500;
 
 /// Declare the firmware entry point.
 ///
@@ -170,6 +176,13 @@ unsafe fn spawn(
 /// region; `tcpip_init` starts lwIP; then the WiFi firmware and the
 /// fully-hosted control path. Ends by deleting itself.
 unsafe extern "C" fn radio_task(_arg: *mut c_void) {
+    // A USB-CDC console drops everything written before the host enumerates
+    // the device, so without this the banner -- and any early failure -- is
+    // simply gone by the time a terminal attaches. Costs a moment at boot and
+    // makes bring-up legible.
+    #[cfg(feature = "usb-console")]
+    delay_ms(CONSOLE_SETTLE_MS);
+
     crate::println!();
     crate::println!(
         "bl616-wifi {} — BouffaloSDK WiFi 6 stack",

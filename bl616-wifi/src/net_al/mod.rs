@@ -654,10 +654,7 @@ pub extern "C" fn net_al_set_ipv6_enable(enable: c_int) -> c_int {
 }
 
 fn iface_for_index(idx: c_int) -> Option<*mut NetIf> {
-    match idx {
-        0 => iface::primary(),
-        _ => None,
-    }
+    usize::try_from(idx).ok().and_then(iface::by_index)
 }
 
 // ------------------------------------------------------------------- shims

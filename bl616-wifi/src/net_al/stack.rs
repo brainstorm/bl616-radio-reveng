@@ -63,17 +63,33 @@ static DHCPD_POOL: AtomicU32 = AtomicU32::new(0);
 /// Set once the poll task is running, so requests made before that fail fast
 /// rather than hanging.
 static RUNNING: AtomicU32 = AtomicU32::new(0);
+/// Claimed by whoever spawns the poll task.
+///
+/// Separate from [`RUNNING`], which the task sets only once it is scheduled:
+/// the blob calls `net_if_add` twice in quick succession (station, then
+/// soft-AP) and both calls would pass a `RUNNING` check and spawn a task of
+/// their own. Two poll tasks then drive the same interface, allocate a
+/// `Stack` each, and wedge the application behind them.
+static SPAWNED: AtomicU32 = AtomicU32::new(0);
 
 /// Post a command and block until the poll task answers or `timeout_ms`
 /// elapses. Must be called from a task.
 pub fn request(cmd: Command, timeout_ms: u32) -> bool {
-    if RUNNING.load(Ordering::Acquire) == 0 {
-        return false;
+    // The blob can ask for DHCP before the poll task has finished starting --
+    // `net_if_add` spawns it and the AP bring-up follows immediately. Wait for
+    // it rather than failing a request that is merely early.
+    let mut waited = 0;
+    while RUNNING.load(Ordering::Acquire) == 0 {
+        if waited >= timeout_ms.min(2_000) {
+            return false;
+        }
+        runtime::delay_ms(10);
+        waited += 10;
     }
+
     RESULT.store(RESULT_PENDING, Ordering::Release);
     COMMAND.store(cmd as u8, Ordering::Release);
 
-    let mut waited = 0;
     while waited < timeout_ms {
         match RESULT.load(Ordering::Acquire) {
             RESULT_OK => return true,
@@ -206,6 +222,9 @@ impl phy::Device for WifiDevice {
 // -------------------------------------------------------------------- stack
 
 struct Stack {
+    /// Address last pushed into smoltcp, so a change made through
+    /// `net_al_ext_set_vif_ip` after startup is noticed.
+    applied: (u32, u32, u32),
     iface: Interface,
     device: WifiDevice,
     sockets: SocketSet<'static>,
@@ -220,6 +239,7 @@ impl Stack {
         let config = Config::new(HardwareAddress::Ethernet(EthernetAddress(mac)));
         let iface = Interface::new(config, &mut device, now());
         Stack {
+            applied: (0, 0, 0),
             iface,
             device,
             sockets: SocketSet::new(alloc::vec::Vec::new()),
@@ -287,6 +307,7 @@ impl Stack {
                     .map(|d| u32::from_le_bytes(d.octets()))
                     .unwrap_or(0);
                 self.set_addr(addr, mask, gw);
+                self.applied = (addr, mask, gw);
                 unsafe { (*self.net_if).dns.store(dns, Ordering::Release) };
                 true
             }
@@ -299,7 +320,23 @@ impl Stack {
         }
     }
 
+    /// Pick up an address the blob configured while we were running.
+    fn sync_addr(&mut self) {
+        let want = unsafe {
+            (
+                (*self.net_if).ipaddr.load(Ordering::Acquire),
+                (*self.net_if).netmask.load(Ordering::Acquire),
+                (*self.net_if).gw.load(Ordering::Acquire),
+            )
+        };
+        if want != self.applied && want.0 != 0 {
+            self.set_addr(want.0, want.1, want.2);
+            self.applied = want;
+        }
+    }
+
     fn poll(&mut self) {
+        self.sync_addr();
         self.iface.poll(now(), &mut self.device, &mut self.sockets);
         if let Some(d) = self.dhcpd.as_mut() {
             d.poll(&mut self.iface, &mut self.sockets);
@@ -318,28 +355,37 @@ fn now() -> Instant {
 /// Spawned by [`start`] once the blob has registered an interface, because
 /// the interface's MAC address is needed to construct the stack.
 extern "C" fn poll_task(_arg: *mut core::ffi::c_void) {
-    let Some(net_if) = iface::primary() else {
-        unsafe { bl616_wifi_sys::vTaskDelete(core::ptr::null_mut()) };
-        unreachable!()
-    };
-    let mac = unsafe { (*net_if).mac };
-    let mut stack = Stack::new(net_if, mac);
-
-    // Apply whatever address the blob configured before we existed.
-    let (addr, mask, gw) = unsafe {
-        (
-            (*net_if).ipaddr.load(Ordering::Acquire),
-            (*net_if).netmask.load(Ordering::Acquire),
-            (*net_if).gw.load(Ordering::Acquire),
-        )
-    };
-    if addr != 0 {
-        stack.set_addr(addr, mask, gw);
-    }
-
+    // Bind lazily. The blob registers the station interface first and the
+    // soft-AP second, and only tells us which one matters when it configures
+    // an address on it -- so committing to slot 0 at startup binds the stack
+    // to the wrong interface in AP mode, and the DHCP server then sees
+    // 0.0.0.0.
+    let mut stack: Option<Stack> = None;
     RUNNING.store(1, Ordering::Release);
 
     loop {
+        if stack.is_none() {
+            if let Some(p) = iface::designated() {
+                let mac = unsafe { (*p).mac };
+                let mut s = Stack::new(p, mac);
+                let (addr, mask, gw) = unsafe {
+                    (
+                        (*p).ipaddr.load(Ordering::Acquire),
+                        (*p).netmask.load(Ordering::Acquire),
+                        (*p).gw.load(Ordering::Acquire),
+                    )
+                };
+                if addr != 0 {
+                    s.set_addr(addr, mask, gw);
+                    s.applied = (addr, mask, gw);
+                }
+                stack = Some(s);
+            }
+        }
+        let Some(stack) = stack.as_mut() else {
+            runtime::delay_ms(10);
+            continue;
+        };
         // Commands first: a caller is blocked waiting on each one.
         let cmd = COMMAND.swap(Command::None as u8, Ordering::AcqRel);
         match cmd {
@@ -355,8 +401,8 @@ extern "C" fn poll_task(_arg: *mut core::ffi::c_void) {
             x if x == Command::DhcpServerStart as u8 => {
                 let packed = DHCPD_POOL.load(Ordering::Acquire);
                 let (start, limit) = ((packed >> 16) as u16, packed as u16);
-                let self_addr = unsafe { (*net_if).ipaddr.load(Ordering::Acquire) };
-                let mask = unsafe { (*net_if).netmask.load(Ordering::Acquire) };
+                let self_addr = unsafe { (*stack.net_if).ipaddr.load(Ordering::Acquire) };
+                let mask = unsafe { (*stack.net_if).netmask.load(Ordering::Acquire) };
                 match Dhcpd::new(&mut stack.sockets, self_addr, mask, start, limit) {
                     Some(d) => {
                         stack.dhcpd = Some(d);
@@ -390,8 +436,13 @@ extern "C" fn poll_task(_arg: *mut core::ffi::c_void) {
 }
 
 /// Start the IP stack task. Called once the blob has added an interface.
+///
+/// Safe to call repeatedly; only the first caller wins.
 pub fn start() {
-    if RUNNING.load(Ordering::Acquire) != 0 {
+    if SPAWNED
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
         return;
     }
     unsafe {
