@@ -144,6 +144,16 @@ pub type tcpip_init_done_fn = Option<unsafe extern "C" fn(arg: *mut c_void)>;
 // ------------------------------------------------------------------ functions
 
 unsafe extern "C" {
+    /// Interrupt nesting depth, non-zero inside a handler.
+    ///
+    /// The port's `xPortIsInsideInterrupt()` is a `portFORCE_INLINE` reading
+    /// exactly this, so it has no symbol of its own to call — but the counter
+    /// it reads is a real global, and the vendor's own `rtos_al.c` relies on
+    /// it. Reading it is how Rust asks the same question.
+    pub static TrapNetCounter: BaseType_t;
+}
+
+unsafe extern "C" {
     // --- board and peripherals
     pub fn board_init();
     pub fn bflb_device_get_by_name(name: *const c_char) -> *mut bflb_device_s;
@@ -176,6 +186,14 @@ unsafe extern "C" {
         ulValue: u32,
         eAction: eNotifyAction,
         pulPreviousNotificationValue: *mut u32,
+    ) -> BaseType_t;
+    pub fn xTaskGenericNotifyFromISR(
+        xTaskToNotify: TaskHandle_t,
+        uxIndexToNotify: UBaseType_t,
+        ulValue: u32,
+        eAction: eNotifyAction,
+        pulPreviousNotificationValue: *mut u32,
+        pxHigherPriorityTaskWoken: *mut BaseType_t,
     ) -> BaseType_t;
     pub fn xTaskGenericNotifyWait(
         uxIndexToWaitOn: UBaseType_t,

@@ -21,19 +21,19 @@
 //! # Why the pender cannot simply notify
 //!
 //! `__pender` runs wherever a waker is woken, and the blob frees TX buffers
-//! from interrupt context — where the non-ISR FreeRTOS calls are not allowed.
-//! There is no reliable interrupt-context flag on this port (`TrapNetCounter`
-//! belongs to the C906 port; the E907 build does not define it), so rather
-//! than depend on detecting it, correctness here never rests on it:
+//! from interrupt context, where the plain FreeRTOS calls are not allowed. The
+//! port does expose the nesting depth the vendor's own `rtos_al.c` tests —
+//! `TrapNetCounter`, which `xPortIsInsideInterrupt()` reads — so the pender
+//! picks the right call rather than guessing:
 //!
-//! * the pender always sets [`PENDING`], which is safe from any context;
-//! * the executor task waits with a bounded timeout, so a missed notification
-//!   costs latency and nothing else;
-//! * the notification is sent only when interrupts are enabled, which rules
-//!   out both interrupt context and critical sections.
+//! * inside an interrupt, `xTaskGenericNotifyFromISR`;
+//! * outside one, with interrupts enabled, `xTaskGenericNotify`;
+//! * inside a critical section, neither — just the flag.
 //!
-//! The wake that matters for throughput — a received frame — arrives on the
-//! blob's RX task with interrupts enabled, so it takes the fast path.
+//! Correctness still does not rest on getting that right. The pender always
+//! sets [`PENDING`] first, which is safe from any context, and the executor
+//! waits with a bounded timeout, so the worst a misjudgement can cost is
+//! latency.
 
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -83,10 +83,17 @@ unsafe impl critical_section::Impl for SingleHart {
     }
 }
 
+/// Whether the caller is inside an interrupt handler.
+fn in_interrupt() -> bool {
+    // Volatile: the counter is written by the trap entry code, which the
+    // compiler cannot see.
+    unsafe { core::ptr::read_volatile(&raw const sys::TrapNetCounter) != 0 }
+}
+
 /// Whether interrupts are enabled right now.
 ///
-/// False inside an interrupt handler and inside a critical section — both
-/// places where the plain FreeRTOS calls must not be used.
+/// False inside an interrupt handler and inside a critical section — the
+/// latter being the case [`in_interrupt`] cannot distinguish on its own.
 fn interrupts_enabled() -> bool {
     let mstatus: usize;
     unsafe { core::arch::asm!("csrr {}, mstatus", out(reg) mstatus, options(nomem, nostack)) };
@@ -134,15 +141,24 @@ fn next_expiration(now: u64) -> u64 {
 /// Mark work pending and, when it is safe to, wake the executor task.
 fn pend() {
     PENDING.store(true, Ordering::Release);
-    if !interrupts_enabled() {
+    let task = EXEC_TASK.load(Ordering::Acquire);
+    if task.is_null() {
         return;
     }
-    let task = EXEC_TASK.load(Ordering::Acquire);
-    if !task.is_null() {
+    if in_interrupt() {
+        // The FromISR form reports whether a higher-priority task became
+        // ready rather than switching to it; the port yields at the end of
+        // the handler anyway, so the flag is not needed here.
+        let mut woken = 0;
+        unsafe {
+            sys::xTaskGenericNotifyFromISR(task as _, 0, 0, E_INCREMENT, core::ptr::null_mut(), &mut woken);
+        }
+    } else if interrupts_enabled() {
         unsafe {
             sys::xTaskGenericNotify(task as _, 0, 0, E_INCREMENT, core::ptr::null_mut());
         }
     }
+    // Inside a critical section: leave it to PENDING and the timeout.
 }
 
 #[export_name = "__pender"]
