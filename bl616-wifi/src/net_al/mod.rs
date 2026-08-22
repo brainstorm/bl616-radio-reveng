@@ -907,7 +907,12 @@ pub unsafe extern "C" fn net_al_ext_get_vif_ip(fvif_idx: c_int, cfg: *mut IpAddr
 
 /// Run the DHCP client and block until it has a lease.
 #[no_mangle]
-pub extern "C" fn net_al_ext_dhcp_connect(_is_api: c_int, to_ms: u32) -> c_int {
+pub extern "C" fn net_al_ext_dhcp_connect(is_api: c_int, to_ms: u32) -> c_int {
+    trace!("[net_al] dhcp_connect is_api={} to_ms={}", is_api, to_ms);
+    // The station interface is the one that runs a DHCP client.
+    if let Some(p) = iface::by_index(0) {
+        stack::set_target(p as *mut c_void);
+    }
     let timeout = if to_ms == 0 { 15_000 } else { to_ms };
     if stack::request(stack::Command::DhcpClientStart, timeout) {
         0
@@ -919,6 +924,7 @@ pub extern "C" fn net_al_ext_dhcp_connect(_is_api: c_int, to_ms: u32) -> c_int {
 
 #[no_mangle]
 pub extern "C" fn net_al_ext_dhcp_disconnect() {
+    trace!("[net_al] dhcp_disconnect");
     stack::request(stack::Command::DhcpClientStop, 2_000);
 }
 

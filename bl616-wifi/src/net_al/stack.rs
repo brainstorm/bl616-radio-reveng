@@ -362,9 +362,15 @@ impl Stack {
                 true
             }
             Some(dhcpv4::Event::Deconfigured) => {
+                // smoltcp reports Deconfigured once when the client starts,
+                // before it has ever held a lease. Only tell the application
+                // an address was lost if it actually had one.
+                let had = unsafe { (*self.net_if).ipaddr.load(Ordering::Acquire) } != 0;
                 self.iface.update_ip_addrs(|a| a.clear());
                 unsafe { (*self.net_if).ipaddr.store(0, Ordering::Release) };
-                post_ip_event(CODE_WIFI_ON_LOST_IP);
+                if had {
+                    post_ip_event(CODE_WIFI_ON_LOST_IP);
+                }
                 false
             }
             None => unsafe { (*self.net_if).ipaddr.load(Ordering::Acquire) != 0 },
