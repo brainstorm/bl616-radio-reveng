@@ -11,7 +11,14 @@
 //! interface handle can always be validated before use.
 //!
 //! Two interfaces are enough: the vendor stack runs one station and one
-//! soft-AP, named `wl0`/`wl1` (`NET_AL_MAX_IFNAME` is 4 bytes including NUL).
+//! soft-AP, named `wl1`/`wl2` (`NET_AL_MAX_IFNAME` is 4 bytes including NUL).
+//!
+//! The numbering starts at 1, not 0, and that is load-bearing: wpa_supplicant
+//! routes L2 frames by interface name, and `eloop_get_l2_event_id` recognises
+//! exactly `"wl1"` and `"wl2"`, falling back to a shared legacy queue for
+//! anything else. In the vendor's build lwIP's loopback interface takes
+//! number 0, so the WiFi interfaces come out as wl1 and wl2; there is no
+//! loopback here, so the offset has to be applied deliberately.
 
 use core::ffi::c_void;
 use core::ptr;
@@ -91,8 +98,9 @@ pub fn add(mac: &[u8; 6], vif_priv: *mut c_void) -> Option<*mut NetIf> {
             unsafe {
                 (*p).mac = *mac;
                 (*p).vif_priv = vif_priv;
-                // "wl0", "wl1" -- three characters plus NUL fits MAX_IFNAME.
-                (*p).name = [b'w', b'l', b'0' + i as u8, 0];
+                // "wl1", "wl2" -- see the module docs: the supplicant matches
+                // on these exact names.
+                (*p).name = [b'w', b'l', b'1' + i as u8, 0];
                 (*p).link_up.store(false, Ordering::Release);
                 (*p).ipaddr.store(0, Ordering::Release);
                 (*p).netmask.store(0, Ordering::Release);

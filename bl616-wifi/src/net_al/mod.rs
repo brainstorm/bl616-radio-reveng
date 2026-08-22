@@ -235,7 +235,9 @@ pub unsafe extern "C" fn net_if_get_name(
         core::ptr::copy_nonoverlapping(i.name.as_ptr(), buf, name_len);
         *buf.add(name_len) = 0;
     }
-    0
+    // The vendor returns the character count and callers test `> 0` -- see
+    // net_eth_receive, which decides the supplicant's L2 event queue from it.
+    name_len as c_int
 }
 
 /// The blob's per-VIF private pointer, handed back unchanged.
@@ -458,7 +460,29 @@ pub unsafe extern "C" fn net_al_tx_req(req: TxReq) -> c_int {
     unsafe { fhost_tx_start(req.net_if, req.net_buf, req.cfm_cb, req.cfm_cb_arg) }
 }
 
+/// Shared fallback queue, for an interface the supplicant does not recognise.
+const ELOOP_EVT_WPA_L2_DATA: c_int = 3;
+/// Per-interface L2 queues, from `eloop_rtos.h`.
+const ELOOP_EVT_WPA_L2_DATA_WL1: c_int = 10;
+const ELOOP_EVT_WPA_L2_DATA_WL2: c_int = 11;
+
+/// Which event queue the supplicant expects L2 frames for `name` on.
+///
+/// Mirrors `eloop_get_l2_event_id`, which is a `static inline` in
+/// `eloop_rtos.h` and so has no symbol to link against.
+fn eloop_l2_event_id(name: &[u8]) -> c_int {
+    match name {
+        b"wl1" => ELOOP_EVT_WPA_L2_DATA_WL1,
+        b"wl2" => ELOOP_EVT_WPA_L2_DATA_WL2,
+        _ => ELOOP_EVT_WPA_L2_DATA,
+    }
+}
+
 extern "C" {
+    /// Deliver a frame to wpa_supplicant's event loop. Lives in
+    /// libwpa_supplicant.
+    fn eloop_event_commit(event_type: c_int, request: *const c_char, req_len: c_int) -> c_int;
+
     /// Hand a buffer to the WiFi firmware for transmission. Lives in the blob.
     fn fhost_tx_start(
         net_if: *mut c_void,
@@ -484,11 +508,32 @@ pub unsafe extern "C" fn net_al_input(
     free_fn: Option<unsafe extern "C" fn(*mut c_void)>,
 ) {
     trace_n!("[net_al] rx len={} off={}", length, offset);
-    if let Some(_i) = iface::validate(net_if) {
+    if let Some(i) = iface::validate(net_if) {
         if !payload.is_null() && length > 0 {
             let frame = unsafe { (payload as *const u8).add(offset as usize) };
             let len = length as usize - (offset as usize).min(length as usize);
-            unsafe { iface::rx_push(net_if as *mut NetIf, frame, len) };
+
+            // L2 first. wpa_supplicant receives EAPOL through its own event
+            // loop, not through the IP stack, so a frame matching a
+            // registered ethertype goes there and nowhere else. Missing this
+            // is invisible until a WPA2 handshake silently never completes.
+            let want = i.l2_ethertype.load(Ordering::Acquire) as u16;
+            let ethertype = (len >= 14)
+                .then(|| unsafe { u16::from_be_bytes([*frame.add(12), *frame.add(13)]) });
+
+            if want != 0 && ethertype == Some(want) {
+                let mut name = [0u8; 8];
+                let n = unsafe { net_if_get_name(net_if, name.as_mut_ptr() as *mut c_char, 8) };
+                let event = if n > 0 {
+                    eloop_l2_event_id(&name[..n as usize])
+                } else {
+                    ELOOP_EVT_WPA_L2_DATA
+                };
+                trace_n!("[net_al] l2 rx ethertype={:04x} -> event {}", want, event);
+                unsafe { eloop_event_commit(event, frame as *const c_char, len as c_int) };
+            } else {
+                unsafe { iface::rx_push(net_if as *mut NetIf, frame, len) };
+            }
         }
     }
     if let Some(f) = free_fn {
