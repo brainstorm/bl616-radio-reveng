@@ -17,6 +17,10 @@ build = "build.rs"
 # Use the generated bindings instead of the hand-written FFI. Kept so the
 # hand-written set can be cross-checked against the headers.
 bindgen = ["dep:bindgen"]
+# Drop the mbedTLS crypto backend from libwpa_supplicant.a so bl616-crypto can
+# provide those symbols instead. The archive is linked with --whole-archive,
+# so the object has to go rather than merely be out-competed.
+rust-crypto = []
 # Put the console on the BL616's own USB peripheral (CherryUSB CDC-ACM)
 # instead of UART0. On boards whose USB-C goes straight into the chip — the
 # Sipeed M0S Dock, for one — this is the difference between needing an

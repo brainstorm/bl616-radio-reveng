@@ -212,6 +212,53 @@ fn build_csdk(project_dir: &Path, sdk: &Path, toolchain_bin: &Path, chip: &str, 
             .env("PATH", &path),
         "build the C substrate",
     );
+
+    if env::var_os("CARGO_FEATURE_RUST_CRYPTO").is_some() {
+        drop_archive_member(
+            project_dir,
+            toolchain_bin,
+            "lib/libwpa_supplicant.a",
+            "crypto_mbedtls_misc.c.obj",
+        );
+    }
+}
+
+/// Remove one object from a built archive.
+///
+/// The link line wraps the vendor archives in `--whole-archive`, so every
+/// member is linked whether or not anything needs it. That makes the usual
+/// trick for replacing a C file -- define its symbols in Rust and let the
+/// linker skip the archive member -- useless: the member arrives regardless
+/// and every symbol collides. Deleting it from the archive is the honest way
+/// to say "this one is ours now".
+///
+/// Safe because the SDK is copied into OUT_DIR before it is built, so this
+/// edits our own build output rather than the vendor tree.
+fn drop_archive_member(project_dir: &Path, toolchain_bin: &Path, archive: &str, member: &str) {
+    let path = project_dir.join("build/build_out").join(archive);
+    assert!(path.is_file(), "no archive at {}", path.display());
+
+    let ar = toolchain_bin.join("riscv64-unknown-elf-ar");
+    // `ar d` on an absent member succeeds quietly, so check first: silently
+    // keeping the C implementation would mean the Rust one is dead code and
+    // nobody would notice.
+    let listing = Command::new(&ar)
+        .arg("t")
+        .arg(&path)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to list {}: {e}", path.display()));
+    assert!(
+        String::from_utf8_lossy(&listing.stdout)
+            .lines()
+            .any(|l| l.trim() == member),
+        "{member} is not in {} -- the SDK layout changed",
+        path.display()
+    );
+
+    run(
+        Command::new(&ar).arg("d").arg(&path).arg(member),
+        "remove the mbedTLS crypto backend from libwpa_supplicant.a",
+    );
 }
 
 fn run(cmd: &mut Command, what: &str) {

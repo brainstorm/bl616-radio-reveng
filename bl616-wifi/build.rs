@@ -79,4 +79,58 @@ fn main() {
             println!("cargo:rustc-link-arg=-Wl,--undefined={sym}");
         }
     }
+
+    if env::var_os("CARGO_FEATURE_RUST_CRYPTO").is_some() {
+        for sym in CRYPTO_EXPORTS {
+            println!("cargo:rustc-link-arg=-Wl,--undefined={sym}");
+        }
+    }
 }
+
+/// The symbols `crypto_mbedtls_misc.c` defines, which `bl616-crypto` replaces.
+///
+/// Anchoring every one matters twice over. The obvious reason is the same as
+/// for the net_al exports: these are `#[no_mangle]` functions in an rlib that
+/// nothing in Rust calls, so `--gc-sections` is entitled to drop them.
+///
+/// The second is subtler. Archive members are pulled in whole and on demand,
+/// so leaving even one unanchored means the linker still needs it, pulls
+/// `crypto_mbedtls_misc.c.obj` in to get it, and every other symbol here
+/// collides with the copy that came along for the ride. The set goes in
+/// together or the link fails — which is the loud failure, and the good one.
+const CRYPTO_EXPORTS: &[&str] = &[
+    "aes_128_cbc_decrypt",
+    "aes_128_cbc_encrypt",
+    "aes_128_ctr_encrypt",
+    "aes_ctr_encrypt",
+    "aes_decrypt",
+    "aes_decrypt_deinit",
+    "aes_decrypt_init",
+    "aes_encrypt",
+    "aes_encrypt_deinit",
+    "aes_encrypt_init",
+    "crypto_cipher_decrypt",
+    "crypto_cipher_deinit",
+    "crypto_cipher_encrypt",
+    "crypto_cipher_init",
+    "crypto_dh_init",
+    "crypto_global_deinit",
+    "crypto_global_init",
+    "crypto_hash_finish",
+    "crypto_hash_init",
+    "crypto_hash_update",
+    "crypto_mod_exp",
+    "hmac_md5",
+    "hmac_md5_vector",
+    "hmac_sha1",
+    "hmac_sha1_vector",
+    "hmac_sha256",
+    "hmac_sha256_vector",
+    "hmac_sha384",
+    "hmac_sha384_vector",
+    "md5_vector",
+    "sha1_vector",
+    "sha256_vector",
+    "sha384_vector",
+    "sha512_vector",
+];
