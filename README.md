@@ -33,10 +33,10 @@ and held -48 dBm.
 
 `--features rust-net` goes further: it drops lwIP and the vendor's network
 adapter (4.1 MB of C) and runs the IP stack in Rust over smoltcp, with a DHCP
-server of its own. Verified on hardware in **AP mode** — a client associates,
-leases `192.168.4.2` and pings 6/6. **Station mode** on the Rust stack
-associates and takes a real DHCP lease, but does not yet answer inbound
-traffic; see the engineering notes.
+server of its own. Verified on hardware in both modes. As an **AP**, a client
+associates, leases `192.168.4.2` and pings 6/6. As a **station**, it joins a
+WPA2 network, takes a DHCP lease from the router, and pings the gateway
+70/70 at ~10 ms.
 
 This is a safe Rust surface over Bouffalo's WiFi stack, not a from-scratch
 driver — the 802.11 MAC and PHY ship only as blobs. the engineering notes is

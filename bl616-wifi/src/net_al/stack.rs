@@ -27,9 +27,11 @@ use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 use smoltcp::iface::{Config, Interface, SocketSet};
 use smoltcp::phy::{self, Checksum, DeviceCapabilities, Medium};
-use smoltcp::socket::dhcpv4;
+use smoltcp::socket::{dhcpv4, icmp};
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpCidr, Ipv4Address, Ipv4Cidr};
+use smoltcp::wire::{
+    EthernetAddress, HardwareAddress, Icmpv4Packet, Icmpv4Repr, IpCidr, Ipv4Address, Ipv4Cidr,
+};
 
 use super::dhcpd::Dhcpd;
 use super::iface::{self, NetIf, RX_FRAME_MAX};
@@ -89,6 +91,48 @@ static RUNNING: AtomicU32 = AtomicU32::new(0);
 /// Frames handed to smoltcp, so a ring that fills without draining is
 /// distinguishable from one nothing is arriving in.
 pub(crate) static POPPED: AtomicU32 = AtomicU32::new(0);
+
+/// Frames handed to `fhost_tx_start`, and those it refused.
+///
+/// Separate from the pool's occupancy: a buffer can be allocated and returned
+/// without anything reaching the air, which is precisely the case these
+/// counters exist to distinguish.
+static TX_SUBMIT: AtomicU32 = AtomicU32::new(0);
+static TX_FAIL: AtomicU32 = AtomicU32::new(0);
+/// Inbound ARP frames, and ARP frames whose target is our own address.
+static RX_ARP: AtomicU32 = AtomicU32::new(0);
+static RX_ARP_FOR_US: AtomicU32 = AtomicU32::new(0);
+
+/// Outbound echo requests sent, and replies matched.
+///
+/// The station lives on an access point that isolates its clients, so no other
+/// host on the network can ping it -- proving the path works has to be done
+/// from this end, against the gateway.
+static PING_WANT: AtomicU32 = AtomicU32::new(0);
+static PING_TX: AtomicU32 = AtomicU32::new(0);
+static PING_RX: AtomicU32 = AtomicU32::new(0);
+/// Round trip of the most recent reply, in milliseconds.
+static PING_RTT_MS: AtomicU32 = AtomicU32::new(0);
+
+/// Identifier for our echo requests; any value will do, it only has to come
+/// back unchanged.
+const PING_IDENT: u16 = 0x616;
+/// Gap between requests.
+const PING_INTERVAL_MS: u64 = 1000;
+
+/// Start pinging the default gateway once an address is configured.
+pub fn ping_start() {
+    PING_WANT.store(1, Ordering::Release);
+}
+
+/// Echo requests sent, replies received, and the last round trip in ms.
+pub fn ping_stats() -> (u32, u32, u32) {
+    (
+        PING_TX.load(Ordering::Relaxed),
+        PING_RX.load(Ordering::Relaxed),
+        PING_RTT_MS.load(Ordering::Relaxed),
+    )
+}
 
 /// Interface the blob has named, or 0 for "not yet told".
 ///
@@ -245,8 +289,10 @@ impl phy::TxToken for WifiTxToken {
                 core::ptr::null_mut(),
             )
         };
+        TX_SUBMIT.fetch_add(1, Ordering::Relaxed);
         if rc != 0 {
             // The firmware refused it; the buffer is still ours to release.
+            TX_FAIL.fetch_add(1, Ordering::Relaxed);
             unsafe { txbuf::free(buf) };
         }
         result
@@ -267,6 +313,16 @@ impl phy::Device for WifiDevice {
         // Reused across calls, so the big buffer is not a stack temporary.
         let (len, _iface) = iface::rx_pop(&mut self.scratch[..])?;
         POPPED.fetch_add(1, Ordering::Relaxed);
+        // Account ARP separately. "Did the request even reach smoltcp, and was
+        // it asking for us?" is the question that separates a stack that never
+        // generates a reply from one whose reply is not getting out.
+        if len >= 42 && self.scratch[12..14] == [0x08, 0x06] {
+            RX_ARP.fetch_add(1, Ordering::Relaxed);
+            let mine = unsafe { (*self.net_if).ipaddr.load(Ordering::Acquire) }.to_le_bytes();
+            if self.scratch[38..42] == mine {
+                RX_ARP_FOR_US.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         Some((
             WifiRxToken {
                 frame: self.scratch[..len].to_vec(),
@@ -306,6 +362,10 @@ struct Stack {
     device: WifiDevice,
     sockets: SocketSet<'static>,
     dhcp_client: Option<smoltcp::iface::SocketHandle>,
+    ping: Option<smoltcp::iface::SocketHandle>,
+    ping_seq: u16,
+    ping_due_ms: u64,
+    ping_sent_ms: u64,
     dhcpd: Option<Dhcpd>,
     /// A DHCP server has been asked for but the interface had no address yet.
     dhcpd_wanted: bool,
@@ -323,6 +383,10 @@ impl Stack {
             device,
             sockets: SocketSet::new(alloc::vec::Vec::new()),
             dhcp_client: None,
+            ping: None,
+            ping_seq: 0,
+            ping_due_ms: 0,
+            ping_sent_ms: 0,
             dhcpd: None,
             dhcpd_wanted: false,
             net_if,
@@ -405,6 +469,77 @@ impl Stack {
                 false
             }
             None => unsafe { (*self.net_if).ipaddr.load(Ordering::Acquire) != 0 },
+        }
+    }
+
+    /// Send an echo request to the gateway once a second and match replies.
+    ///
+    /// `auto-icmp-echo-reply` answers inbound pings without a socket, but
+    /// originating one needs somewhere for the reply to land, so this binds an
+    /// ICMP socket on our identifier.
+    fn poll_ping(&mut self) {
+        if PING_WANT.load(Ordering::Acquire) == 0 {
+            return;
+        }
+        let gw = unsafe { (*self.net_if).gw.load(Ordering::Acquire) };
+        let addr = unsafe { (*self.net_if).ipaddr.load(Ordering::Acquire) };
+        if gw == 0 || addr == 0 {
+            return;
+        }
+
+        if self.ping.is_none() {
+            let rx = icmp::PacketBuffer::new(
+                alloc::vec![icmp::PacketMetadata::EMPTY; 4],
+                alloc::vec![0u8; 512],
+            );
+            let tx = icmp::PacketBuffer::new(
+                alloc::vec![icmp::PacketMetadata::EMPTY; 4],
+                alloc::vec![0u8; 512],
+            );
+            let mut sock = icmp::Socket::new(rx, tx);
+            if sock.bind(icmp::Endpoint::Ident(PING_IDENT)).is_err() {
+                return;
+            }
+            self.ping = Some(self.sockets.add(sock));
+        }
+        let handle = self.ping.unwrap();
+        let now = runtime::uptime_ms();
+        let dst = Ipv4Address::from(gw.to_le_bytes());
+
+        let sock = self.sockets.get_mut::<icmp::Socket>(handle);
+        if now >= self.ping_due_ms && sock.can_send() {
+            self.ping_seq = self.ping_seq.wrapping_add(1);
+            let payload = b"bl616-rust-net";
+            let repr = Icmpv4Repr::EchoRequest {
+                ident: PING_IDENT,
+                seq_no: self.ping_seq,
+                data: payload,
+            };
+            if let Ok(buf) = sock.send(repr.buffer_len(), dst.into()) {
+                let mut packet = Icmpv4Packet::new_unchecked(buf);
+                repr.emit(&mut packet, &Default::default());
+                PING_TX.fetch_add(1, Ordering::Relaxed);
+                self.ping_sent_ms = now;
+            }
+            self.ping_due_ms = now + PING_INTERVAL_MS;
+        }
+
+        while sock.can_recv() {
+            let Ok((payload, _from)) = sock.recv() else {
+                break;
+            };
+            let packet = Icmpv4Packet::new_unchecked(payload);
+            if let Ok(Icmpv4Repr::EchoReply { ident, .. }) =
+                Icmpv4Repr::parse(&packet, &Default::default())
+            {
+                if ident == PING_IDENT {
+                    PING_RX.fetch_add(1, Ordering::Relaxed);
+                    PING_RTT_MS.store(
+                        now.saturating_sub(self.ping_sent_ms) as u32,
+                        Ordering::Relaxed,
+                    );
+                }
+            }
         }
     }
 
@@ -565,18 +700,28 @@ extern "C" fn poll_task(_arg: *mut core::ffi::c_void) {
             RESULT.store(RESULT_OK, Ordering::Release);
         }
 
+        stack.poll_ping();
+
         #[cfg(feature = "net-trace")]
         {
             static TICK: AtomicU32 = AtomicU32::new(0);
             if TICK.fetch_add(1, Ordering::Relaxed) % 400 == 0 {
                 let (tx, peak, dry, rx, drop) = super::stats();
                 crate::println!(
-                    "[net_al] tx_inflight={} peak={} exhausted={} rx={} dropped={}",
+                    "[net_al] inflight={} peak={} dry={} rx={} drop={} pop={} txq={} txfail={} arp={}/{} ping={}/{} rtt={}ms",
                     tx,
                     peak,
                     dry,
                     rx,
-                    drop
+                    drop,
+                    POPPED.load(Ordering::Relaxed),
+                    TX_SUBMIT.load(Ordering::Relaxed),
+                    TX_FAIL.load(Ordering::Relaxed),
+                    RX_ARP_FOR_US.load(Ordering::Relaxed),
+                    RX_ARP.load(Ordering::Relaxed),
+                    PING_RX.load(Ordering::Relaxed),
+                    PING_TX.load(Ordering::Relaxed),
+                    PING_RTT_MS.load(Ordering::Relaxed)
                 );
             }
         }

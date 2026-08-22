@@ -77,6 +77,12 @@ fn app() -> ! {
     println!("[sta] heap free {} bytes", runtime::free_heap());
     println!("[sta] try: ping {}", ip.address);
 
+    // Ping the gateway from here. The access point isolates its clients, so
+    // nothing else on the network can ping this board -- an outbound echo is
+    // the only end-to-end proof of the Rust stack available on this network.
+    #[cfg(feature = "rust-net")]
+    bl616_wifi::net_al::ping_start();
+
     // Keep reconnecting on our own rather than leaning on the stack's
     // auto-reconnect, so the console shows what is going on.
     loop {
@@ -99,5 +105,11 @@ fn app() -> ! {
             runtime::uptime_ms() / 1000,
             runtime::free_heap()
         );
+
+        #[cfg(feature = "rust-net")]
+        {
+            let (tx, rx, rtt) = bl616_wifi::net_al::ping_stats();
+            println!("[sta] gateway ping: {rx}/{tx} replies, last {rtt} ms");
+        }
     }
 }

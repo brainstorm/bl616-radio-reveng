@@ -1035,6 +1035,8 @@ pub extern "C" fn tcpip_init(_initfunc: *mut c_void, _arg: *mut c_void) {}
 /// TX pool and RX ring counters, for bring-up.
 ///
 /// Returns `(tx_in_use, tx_peak, tx_exhausted, rx_accepted, rx_dropped)`.
+pub use stack::{ping_start, ping_stats};
+
 pub fn stats() -> (u32, u32, u32, u32, u32) {
     let (in_use, peak, exhausted) = txbuf::stats();
     let (accepted, dropped) = iface::rx_stats();
