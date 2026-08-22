@@ -69,11 +69,9 @@ const MTSPEND: *mut u32 = 0xe000_0000 as *mut u32;
 #[unsafe(no_mangle)]
 pub static mut pxCurrentTCB: *mut Tcb = core::ptr::null_mut();
 
-unsafe extern "C" {
-    /// Chosen by the scheduler; the handler calls this between saving and
-    /// restoring.
-    fn vTaskSwitchContext();
-}
+// `vTaskSwitchContext` is called from the assembly above, not from Rust, so
+// there is no declaration to make here -- naming it would only add a symbol
+// nothing references.
 
 core::arch::global_asm!(
     r#"
@@ -272,11 +270,11 @@ unsafe impl Port for RiscvPort {
         unsafe {
             core::ptr::write_bytes(frame, 0, FRAME_WORDS);
             // mret jumps here.
-            frame.add(OFF_MEPC).write(entry as usize);
+            frame.add(OFF_MEPC).write(entry as *const () as usize);
             // The single argument, in a0.
             frame.add(OFF_A0).write(arg as usize);
             // If the task returns, it returns to somewhere that stops.
-            frame.add(OFF_RA).write(task_exited as usize);
+            frame.add(OFF_RA).write(task_exited as *const () as usize);
         }
         frame
     }
