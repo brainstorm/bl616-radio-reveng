@@ -31,6 +31,11 @@ and pinged `192.168.4.1` 5/5 at ~2.9 ms. STA: joined a WPA2 network with a
 full EAPOL 1-4 handshake, took `192.168.87.22/24` by DHCP, answered 6/6 pings
 and held -48 dBm.
 
+`--features rust-net` goes further: it drops lwIP and the vendor's network
+adapter (4.1 MB of C) and runs the IP stack in Rust over smoltcp, with a DHCP
+server of its own. Verified on hardware — a client associates, leases
+`192.168.4.2` and pings 6/6.
+
 This is a safe Rust surface over Bouffalo's WiFi stack, not a from-scratch
 driver — the 802.11 MAC and PHY ship only as blobs. the engineering notes is
 the engineering record: what is open, what is not, the ABI traps, and the
@@ -111,6 +116,8 @@ bl616_wifi::event::set_handler(|event, value| println!("[event] {event:?} ({valu
 | `alloc` | yes | global allocator over the SDK's TLSF heap |
 | `panic-handler` | yes | print the panic to the console and halt |
 | `usb-console` | no | console on USB-CDC instead of UART0 |
+| `rust-net` | no | replace lwIP with a Rust stack over smoltcp, incl. a DHCP server |
+| `net-trace` | no | log every `net_al` call the blob makes (bring-up aid) |
 
 ## Examples
 
