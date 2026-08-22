@@ -74,6 +74,11 @@ pub mod sta;
 #[cfg(feature = "rust-crypto")]
 use bl616_crypto as _;
 
+// Linked for its C ABI exports: it *is* the scheduler, and nothing in Rust
+// calls it by name.
+#[cfg(feature = "rust-sched")]
+use bl616_rtos as _;
+
 /// The blobs' RTOS abstraction layer, replacing the vendor's rtos_al.c.
 #[cfg(feature = "rust-rtos")]
 pub mod rtos_al;

@@ -452,3 +452,24 @@ fn advance_mtimer_compare() {
         core::ptr::write_volatile(cmp, next as u32);
     }
 }
+
+/// Where asynchronous interrupts that are not the tick go.
+///
+/// The vendor's port declares this weak and never defines it; the platform's
+/// own dispatcher is `interrupt_entry`, which walks the SoC's vector table.
+/// Routing here rather than decoding interrupt numbers ourselves is
+/// deliberate — the peripheral map belongs to the SDK, and duplicating it is
+/// how a driver stops receiving interrupts for reasons nobody can find.
+#[unsafe(no_mangle)]
+pub extern "C" fn freertos_risc_v_application_interrupt_handler() {
+    unsafe extern "C" {
+        fn interrupt_entry();
+    }
+    unsafe { interrupt_entry() };
+}
+
+/// A synchronous exception that is not a yield.
+#[unsafe(no_mangle)]
+pub extern "C" fn freertos_risc_v_application_exception_handler() {
+    bl616_rtos_fault();
+}

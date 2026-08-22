@@ -17,6 +17,7 @@ keywords = ["bl616", "bouffalo", "wifi", "riscv", "embedded"]
 bl616-wifi-sys = { path = "../bl616-wifi-sys", version = "0.1.0" }
 bl616-dhcp = { path = "../bl616-dhcp" }
 bl616-crypto = { path = "../bl616-crypto", optional = true }
+bl616-rtos = { path = "../bl616-rtos", optional = true }
 
 # The embassy front end. Optional: the default build and the smoltcp front end
 # do not pull any of this in.
@@ -66,6 +67,9 @@ rust-crypto = ["dep:bl616-crypto", "bl616-wifi-sys/rust-crypto"]
 # Stage 3, first step: the blobs' rtos_* layer in Rust. Still forwards to
 # FreeRTOS -- this moves the seam, not yet the scheduler behind it.
 rust-rtos = ["bl616-wifi-sys/rust-rtos"]
+# Stage 3 proper: replace FreeRTOS with the Rust scheduler. Implies rust-rtos,
+# since the blobs' adapter has to sit on top of it.
+rust-sched = ["rust-rtos", "bl616-wifi-sys/rust-sched", "dep:bl616-rtos"]
 # Present the MAC as an embassy-net Driver instead of driving smoltcp
 # ourselves. The application brings its own embassy-net stack; this crate
 # supplies the device, the time driver and an executor hosted on FreeRTOS.

@@ -58,7 +58,7 @@ fn main() {
     let flags_make = link_txt.with_file_name("flags.make");
 
     emit_tick_rate(&csdk_dir);
-    emit_link_args(&link_txt, &build_dir, &out_dir);
+    emit_link_args(&link_txt, &build_dir, &out_dir, &toolchain_bin);
     #[cfg(feature = "bindgen")]
     generate_bindings(&manifest_dir, &out_dir, &flags_make, &toolchain_bin);
     emit_layout_probe(&manifest_dir, &out_dir, &flags_make, &toolchain_bin);
@@ -213,62 +213,69 @@ fn build_csdk(project_dir: &Path, sdk: &Path, toolchain_bin: &Path, chip: &str, 
         "build the C substrate",
     );
 
-    if env::var_os("CARGO_FEATURE_RUST_CRYPTO").is_some() {
-        drop_archive_member(
-            project_dir,
-            toolchain_bin,
-            "lib/libwpa_supplicant.a",
-            "crypto_mbedtls_misc.c.obj",
-        );
-    }
-
-    if env::var_os("CARGO_FEATURE_RUST_RTOS").is_some() {
-        drop_archive_member(
-            project_dir,
-            toolchain_bin,
-            "lib/libmacsw_os_adapter.a",
-            "rtos_al.c.obj",
-        );
-    }
 }
 
-/// Remove one object from a built archive.
+/// A copy of `archive` with one member removed, for our link line only.
 ///
-/// The link line wraps the vendor archives in `--whole-archive`, so every
-/// member is linked whether or not anything needs it. That makes the usual
-/// trick for replacing a C file -- define its symbols in Rust and let the
-/// linker skip the archive member -- useless: the member arrives regardless
-/// and every symbol collides. Deleting it from the archive is the honest way
-/// to say "this one is ours now".
+/// The obvious implementation deletes the member from the archive in place,
+/// and that is what this did first. It is wrong, and the way it is wrong is
+/// worth keeping: the CMake build links an ELF of its own from these same
+/// archives, so as soon as anything re-runs `make` -- a second cargo
+/// invocation, a clippy pass -- that link fails on the symbols we removed.
+/// The build worked once and then broke on rebuild.
 ///
-/// Safe because the SDK is copied into OUT_DIR before it is built, so this
-/// edits our own build output rather than the vendor tree.
-fn drop_archive_member(project_dir: &Path, toolchain_bin: &Path, archive: &str, member: &str) {
-    let path = project_dir.join("build/build_out").join(archive);
-    assert!(path.is_file(), "no archive at {}", path.display());
+/// Copying leaves the vendor build whole and gives the Rust link its own
+/// view. The copy lands in OUT_DIR next to everything else we generate.
+/// Vendor archives with one object replaced by Rust: which archive, which
+/// member, and the feature that asks for it.
+const REPLACED_MEMBERS: &[(&str, &str, &str)] = &[
+    (
+        "libwpa_supplicant.a",
+        "crypto_mbedtls_misc.c.obj",
+        "CARGO_FEATURE_RUST_CRYPTO",
+    ),
+    (
+        "libmacsw_os_adapter.a",
+        "rtos_al.c.obj",
+        "CARGO_FEATURE_RUST_RTOS",
+    ),
+];
+
+fn archive_without(
+    out_dir: &Path,
+    toolchain_bin: &Path,
+    archive: &Path,
+    member: &str,
+) -> PathBuf {
+    let stem = archive.file_stem().unwrap_or_default().to_string_lossy();
+    let filtered = out_dir.join(format!("{stem}.norust.a"));
+    fs::copy(archive, &filtered)
+        .unwrap_or_else(|e| panic!("cannot copy {}: {e}", archive.display()));
 
     let ar = toolchain_bin.join("riscv64-unknown-elf-ar");
-    // `ar d` on an absent member succeeds quietly, so check first: silently
-    // keeping the C implementation would mean the Rust one is dead code and
-    // nobody would notice.
+    // `ar d` says nothing about a member that is not there, and silently
+    // keeping the C implementation would leave the Rust one dead with nothing
+    // to show for it.
     let listing = Command::new(&ar)
         .arg("t")
-        .arg(&path)
+        .arg(&filtered)
         .output()
-        .unwrap_or_else(|e| panic!("failed to list {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("failed to list {}: {e}", filtered.display()));
     assert!(
         String::from_utf8_lossy(&listing.stdout)
             .lines()
             .any(|l| l.trim() == member),
         "{member} is not in {} -- the SDK layout changed",
-        path.display()
+        archive.display()
     );
 
     run(
-        Command::new(&ar).arg("d").arg(&path).arg(member),
-        "remove the mbedTLS crypto backend from libwpa_supplicant.a",
+        Command::new(&ar).arg("d").arg(&filtered).arg(member),
+        "remove a replaced object from our copy of the archive",
     );
+    filtered
 }
+
 
 fn run(cmd: &mut Command, what: &str) {
     let status = cmd
@@ -391,12 +398,17 @@ fn shell_split(line: &str) -> Vec<String> {
 /// stub `main.c.obj` — Rust brings its own `main`. `--whole-archive` matters:
 /// most of what the WiFi stack needs is pulled in by constructor sections and
 /// linker-script `KEEP`s rather than by symbol reference.
-fn emit_link_args(link_txt: &Path, build_dir: &Path, out_dir: &Path) {
+fn emit_link_args(link_txt: &Path, build_dir: &Path, out_dir: &Path, toolchain_bin: &Path) {
     let line = fs::read_to_string(link_txt)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", link_txt.display()));
 
     let tokens = shell_split(&line);
     let drop_c_net = env::var_os("CARGO_FEATURE_RUST_NET").is_some();
+    // Stage 3: the Rust scheduler supplies every FreeRTOS symbol the rest of
+    // the system references, so the archive goes entirely -- unlike the
+    // crypto and rtos_al swaps, which removed one object each, nothing in
+    // this one survives.
+    let drop_freertos = env::var_os("CARGO_FEATURE_RUST_SCHED").is_some();
     let mut args = Vec::new();
     let mut skip_next = false;
 
@@ -427,10 +439,24 @@ fn emit_link_args(link_txt: &Path, build_dir: &Path, out_dir: &Path) {
         {
             continue;
         }
+        if drop_freertos && tok.ends_with("libfreertos.a") {
+            continue;
+        }
         // Archive paths are relative to the CMake build directory, and the
         // linker will be run from somewhere else entirely.
         let absolute = build_dir.join(tok);
         if !tok.starts_with('-') && absolute.is_file() {
+            // Where Rust replaces one object out of a vendor archive, link
+            // against a filtered copy rather than the archive itself -- see
+            // `archive_without`.
+            let replaced = REPLACED_MEMBERS.iter().find(|(archive, _, feature)| {
+                tok.ends_with(archive) && env::var_os(feature).is_some()
+            });
+            if let Some((_, member, _)) = replaced {
+                let filtered = archive_without(out_dir, toolchain_bin, &absolute, member);
+                args.push(filtered.to_string_lossy().into_owned());
+                continue;
+            }
             args.push(absolute.to_string_lossy().into_owned());
             continue;
         }
