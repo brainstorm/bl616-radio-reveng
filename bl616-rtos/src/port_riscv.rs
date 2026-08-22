@@ -279,6 +279,92 @@ freertos_risc_v_trap_handler:
     call  bl616_rtos_fault
     RESTORE_CONTEXT
 
+
+    /* Enter the first task.
+       The context was never saved, so it cannot be returned to with mret:
+       the frame is restored by hand and entered with a plain `ret`, taking
+       the entry point out of the slot that would hold mepc. This is what the
+       vendor port does, and the reason the stack initialiser puts the entry
+       point at word 0. */
+    .global xPortStartFirstTask
+    .align 4
+xPortStartFirstTask:
+    /* Vectored mode: the low two bits of mtvec select it, and the port
+       asserts they are set. */
+    la    t0, freertos_risc_v_trap_handler
+    ori   t0, t0, 3
+    csrw  mtvec, t0
+
+    la    sp, pxCurrentTCB
+    lw    sp, 0(sp)
+    lw    sp, 0(sp)                 /* stack_ptr is the first TCB member */
+
+    lw    x1, 0(sp)                 /* entry point, returned to below */
+    lw    x5, 4(sp)                 /* saved mstatus */
+    ori   x5, x5, 8                 /* MIE: this returns with ret, not mret */
+    csrw  mstatus, x5
+    lw    x6,  16(sp)
+    lw    x7,  20(sp)
+    lw    x8,  24(sp)
+    lw    x9,  28(sp)
+    lw    x10,  32(sp)
+    lw    x11,  36(sp)
+    lw    x12,  40(sp)
+    lw    x13,  44(sp)
+    lw    x14,  48(sp)
+    lw    x15,  52(sp)
+    lw    x16,  56(sp)
+    lw    x17,  60(sp)
+    lw    x18,  64(sp)
+    lw    x19,  68(sp)
+    lw    x20,  72(sp)
+    lw    x21,  76(sp)
+    lw    x22,  80(sp)
+    lw    x23,  84(sp)
+    lw    x24,  88(sp)
+    lw    x25,  92(sp)
+    lw    x26,  96(sp)
+    lw    x27, 100(sp)
+    lw    x28, 104(sp)
+    lw    x29, 108(sp)
+    lw    x30, 112(sp)
+    lw    x31, 116(sp)
+    addi  sp, sp, 124
+    flw   f0,   0(sp)
+    flw   f1,   4(sp)
+    flw   f2,   8(sp)
+    flw   f3,  12(sp)
+    flw   f4,  16(sp)
+    flw   f5,  20(sp)
+    flw   f6,  24(sp)
+    flw   f7,  28(sp)
+    flw   f8,  32(sp)
+    flw   f9,  36(sp)
+    flw   f10,  40(sp)
+    flw   f11,  44(sp)
+    flw   f12,  48(sp)
+    flw   f13,  52(sp)
+    flw   f14,  56(sp)
+    flw   f15,  60(sp)
+    flw   f16,  64(sp)
+    flw   f17,  68(sp)
+    flw   f18,  72(sp)
+    flw   f19,  76(sp)
+    flw   f20,  80(sp)
+    flw   f21,  84(sp)
+    flw   f22,  88(sp)
+    flw   f23,  92(sp)
+    flw   f24,  96(sp)
+    flw   f25, 100(sp)
+    flw   f26, 104(sp)
+    flw   f27, 108(sp)
+    flw   f28, 112(sp)
+    flw   f29, 116(sp)
+    flw   f30, 120(sp)
+    flw   f31, 124(sp)
+    addi  sp, sp, 128
+    ret
+
     .global freertos_risc_v_exception_handler
     .align 4
 freertos_risc_v_exception_handler:
@@ -472,4 +558,50 @@ pub extern "C" fn freertos_risc_v_application_interrupt_handler() {
 #[unsafe(no_mangle)]
 pub extern "C" fn freertos_risc_v_application_exception_handler() {
     bl616_rtos_fault();
+}
+
+/// CLINT machine timer, from the build's own `-D` flags.
+const MTIME: *const u32 = 0xE000_BFF8 as *const u32;
+const MTIMECMP: *mut u32 = 0xE000_4000 as *mut u32;
+/// `configCPU_CLOCK_HZ / configTICK_RATE_HZ`: the CLINT counts at 1 MHz and
+/// the tick is 1 kHz.
+const TIMER_INCREMENTS_PER_TICK: usize = 1_000_000 / 1_000;
+
+/// Program the first tick and hand the addresses to the tick handler.
+pub fn setup_timer_interrupt() {
+    unsafe {
+        pullMachineTimerCompareRegister = MTIMECMP;
+        uxTimerIncrementsForOneTick = TIMER_INCREMENTS_PER_TICK;
+
+        // Read the 64-bit counter without tearing: if the high word moved
+        // between the two reads, read again.
+        let now = loop {
+            let hi = core::ptr::read_volatile(MTIME.add(1));
+            let lo = core::ptr::read_volatile(MTIME);
+            let hi2 = core::ptr::read_volatile(MTIME.add(1));
+            if hi == hi2 {
+                break ((hi as u64) << 32) | lo as u64;
+            }
+        };
+        ullNextTime = now + TIMER_INCREMENTS_PER_TICK as u64;
+
+        let next = ullNextTime;
+        core::ptr::write_volatile(MTIMECMP, u32::MAX);
+        core::ptr::write_volatile(MTIMECMP.add(1), (next >> 32) as u32);
+        core::ptr::write_volatile(MTIMECMP, next as u32);
+    }
+}
+
+/// Enable the machine timer and external interrupts, and let the platform's
+/// controller through for IRQ 7.
+pub fn enable_interrupts() {
+    unsafe extern "C" {
+        fn bflb_irq_enable(irq: core::ffi::c_int);
+    }
+    unsafe {
+        // MTIE (bit 7) and MEIE (bit 11), which is what the vendor sets when
+        // the MTIME addresses are configured.
+        core::arch::asm!("csrs mie, {}", in(reg) 0x880, options(nomem, nostack));
+        bflb_irq_enable(7);
+    }
 }

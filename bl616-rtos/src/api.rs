@@ -172,18 +172,33 @@ pub extern "C" fn vTaskDelay(ticks: TickType) {
     RiscvPort::yield_now();
 }
 
+/// Start scheduling. Never returns.
+///
+/// The order matters and the first attempt got it wrong by omission: without
+/// pointing `mtvec` at our own trap handler, programming the machine timer
+/// and letting the platform's controller through, the first `ecall` traps
+/// into a vector table that knows nothing about this scheduler and the board
+/// hangs before it reaches USB.
 #[unsafe(no_mangle)]
 pub extern "C" fn vTaskStartScheduler() {
-    let sp = lock(|s| {
+    // The timer daemon has to exist before anything can schedule.
+    xTimerCreateTimerTask();
+
+    lock(|s| {
         s.set_running(true);
-        let next = s.pick_next()?;
-        s.set_current(next);
-        publish_current(s);
-        s.get(next).map(|t| t.stack_ptr)
+        if let Some(next) = s.pick_next() {
+            s.set_current(next);
+            publish_current(s);
+        }
     });
-    if let Some(sp) = sp {
-        unsafe { RiscvPort::start_first_task(sp) }
+
+    crate::port_riscv::setup_timer_interrupt();
+    crate::port_riscv::enable_interrupts();
+
+    unsafe extern "C" {
+        fn xPortStartFirstTask() -> !;
     }
+    unsafe { xPortStartFirstTask() }
 }
 
 #[unsafe(no_mangle)]
