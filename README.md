@@ -61,7 +61,8 @@ git clone --depth 1 https://github.com/bouffalolab/bouffalo_sdk vendor/bouffalo_
 # ...or point at an existing clone:  export BL_SDK_BASE=/path/to/bouffalo_sdk
 ```
 
-Also needs `cmake`, `make`, `python3` and `clang` (for bindgen's libclang).
+Also needs `cmake`, `make` and `python3`. No `clang`: the FFI is hand-written
+and checked against the vendor headers by the C compiler at build time.
 
 The toolchain is not interchangeable. The vendor archives are `-mabi=ilp32f`
 with GCC-LTO objects inside, so the Rust target must be `riscv32imafc`
@@ -166,7 +167,7 @@ That variable comes from `bl616-wifi-sys`'s `links` metadata, so depend on
 
 ```
 bl616-wifi/        the crate you use, plus examples/
-bl616-wifi-sys/    bindgen FFI; build.rs drives the C build and replays the link
+bl616-wifi-sys/    hand-written FFI; build.rs drives the C build and replays the link
   csdk/            a BouffaloSDK project: defconfig, FreeRTOSConfig.h, lwipopts
 xtask/             build / image / flash / setup
 the engineering notes            engineering record and roadmap
