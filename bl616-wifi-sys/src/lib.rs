@@ -6,10 +6,22 @@
 //! it runs on.
 //!
 //! Nothing here is safe or ergonomic on purpose — that is [`bl616-wifi`]'s
-//! job. The bindings are generated at build time by `bindgen` from the SDK's
-//! own headers, using the exact preprocessor configuration CMake compiled the
-//! C side with, so they track whichever SDK revision you point `BL_SDK_BASE`
-//! at instead of being a hand-transcribed snapshot.
+//! job.
+//!
+//! The boundary is written out by hand in [`ffi`]: 57 declarations, which is
+//! what the Rust side actually uses, against the 2781 lines bindgen produced
+//! from the same headers. That boundary is the thing every remaining stage of
+//! the pure-Rust roadmap has to reason about, so it is worth being able to
+//! read and diff it — and dropping bindgen takes `libclang` off the list of
+//! things a build needs.
+//!
+//! Hand-written FFI rots quietly, so the C compiler is kept as the oracle:
+//! `build.rs` measures every size and offset `ffi` depends on directly from
+//! the vendor headers, and `ffi` asserts its own layout against those numbers
+//! at compile time. An SDK that moves a field fails the build and names it.
+//!
+//! The generated bindings are still available behind the `bindgen` feature,
+//! which is how the hand-written set was cross-checked in the first place.
 //!
 //! # What is actually being linked
 //!
@@ -34,7 +46,13 @@
     rustdoc::broken_intra_doc_links
 )]
 
+#[cfg(feature = "bindgen")]
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+
+#[cfg(not(feature = "bindgen"))]
+mod ffi;
+#[cfg(not(feature = "bindgen"))]
+pub use ffi::*;
 
 /// FreeRTOS tick rate, in Hz.
 ///

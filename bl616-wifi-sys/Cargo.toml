@@ -14,6 +14,9 @@ links = "bl616_wifi_csdk"
 build = "build.rs"
 
 [features]
+# Use the generated bindings instead of the hand-written FFI. Kept so the
+# hand-written set can be cross-checked against the headers.
+bindgen = ["dep:bindgen"]
 # Put the console on the BL616's own USB peripheral (CherryUSB CDC-ACM)
 # instead of UART0. On boards whose USB-C goes straight into the chip — the
 # Sipeed M0S Dock, for one — this is the difference between needing an
@@ -26,7 +29,7 @@ usb-console = []
 rust-net = []
 
 [build-dependencies]
-bindgen = "0.72.1"
+bindgen = { version = "0.72.1", optional = true }
 
 [lints.rust]
 # bindgen output is not our style problem

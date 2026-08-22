@@ -59,7 +59,9 @@ fn main() {
 
     emit_tick_rate(&csdk_dir);
     emit_link_args(&link_txt, &build_dir, &out_dir);
+    #[cfg(feature = "bindgen")]
     generate_bindings(&manifest_dir, &out_dir, &flags_make, &toolchain_bin);
+    emit_layout_probe(&manifest_dir, &out_dir, &flags_make, &toolchain_bin);
 
     // Consumers (xtask, mostly) need to find the SDK and the generated linker
     // script without re-deriving any of this.
@@ -414,6 +416,7 @@ fn emit_link_args(link_txt: &Path, build_dir: &Path, out_dir: &Path) {
 
 /// Point `clang-sys` at one specific libclang, and report where that clang
 /// keeps its freestanding headers (`stdbool.h` and friends).
+#[cfg(feature = "bindgen")]
 fn setup_libclang() -> Option<PathBuf> {
     let resource_dir = Command::new("clang")
         .arg("-print-resource-dir")
@@ -469,6 +472,7 @@ fn setup_libclang() -> Option<PathBuf> {
 
 /// bindgen over the vendor headers, using the exact `-D`/`-I` set CMake
 /// compiled the C substrate with (including the generated `autoconf.h`).
+#[cfg(feature = "bindgen")]
 fn generate_bindings(manifest_dir: &Path, out_dir: &Path, flags_make: &Path, toolchain_bin: &Path) {
     let clang_builtin_includes = setup_libclang();
 
@@ -574,6 +578,7 @@ fn generate_bindings(manifest_dir: &Path, out_dir: &Path, flags_make: &Path, too
         .expect("cannot write bindings.rs");
 }
 
+#[cfg(feature = "bindgen")]
 fn newlib_includes(toolchain_bin: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
@@ -602,4 +607,154 @@ fn newlib_includes(toolchain_bin: &Path) -> Vec<PathBuf> {
     }
 
     dirs
+}
+
+
+/// Types and fields whose layout `src/ffi.rs` declares, and which the C
+/// headers therefore have to agree about. Field names are in C spelling.
+const LAYOUT_CHECKS: &[(&str, &str, &[&str])] = &[
+    (
+        "AP_PARAMS",
+        "wifi_mgmr_ap_params_t",
+        &[
+            "ssid", "key", "akm", "channel", "type", "use_ipcfg", "use_dhcpd", "start", "limit",
+            "ap_ipaddr", "ap_mask", "ap_max_inactivity", "hidden_ssid", "isolation", "bcn_interval",
+            "ap_vendor_elements", "bcn_mode", "bcn_timer", "disable_wmm",
+        ],
+    ),
+    (
+        "SCAN_PARAMS",
+        "wifi_mgmr_scan_params_t",
+        &[
+            "ssid_length", "ssid_array", "bssid", "bssid_set_flag", "probe_cnt", "channels_cnt",
+            "channels", "duration", "passive", "extra_ies", "extra_ies_len",
+        ],
+    ),
+    (
+        "ASYNC_EVENT",
+        "struct async_input_event",
+        &["entry", "type", "finish", "size", "code", "value"],
+    ),
+];
+
+/// Ask the C compiler what these types actually look like, and hand the
+/// answers to Rust as constants.
+///
+/// Hand-written FFI goes stale silently: a struct gains a field in a new SDK
+/// and the next call writes past the end of it. So nothing in `src/ffi.rs` is
+/// a trusted transcription -- every size, alignment and offset it depends on
+/// is measured here from the vendor headers and asserted against Rust's own
+/// layout at compile time. An SDK that moves a field fails the build naming
+/// the field.
+///
+/// The measurement is a linker trick rather than a running program, because
+/// nothing here can execute target code: declare an array whose length is the
+/// value wanted, then read the symbol size back with `nm`.
+fn emit_layout_probe(manifest_dir: &Path, out_dir: &Path, flags_make: &Path, toolchain_bin: &Path) {
+    let mut c = String::from("#include <stddef.h>\n#include \"wrapper.h\"\n");
+    for (prefix, c_type, fields) in LAYOUT_CHECKS {
+        c.push_str(&format!("char __probe_{prefix}_SIZE[sizeof({c_type})];\n"));
+        c.push_str(&format!("char __probe_{prefix}_ALIGN[_Alignof({c_type})];\n"));
+        for f in *fields {
+            // An offset can be zero and a zero-length array is not portable,
+            // so carry offset+1 and subtract it back.
+            c.push_str(&format!(
+                "char __probe_{prefix}_OFF_{}[offsetof({c_type}, {f}) + 1];\n",
+                f.to_uppercase()
+            ));
+        }
+    }
+    let probe_c = out_dir.join("layout_probe.c");
+    fs::write(&probe_c, &c).expect("write layout_probe.c");
+
+    let probe_o = out_dir.join("layout_probe.o");
+    let gcc = toolchain_bin.join("riscv64-unknown-elf-gcc");
+    let mut cmd = Command::new(&gcc);
+    cmd.arg("-c")
+        .arg(&probe_c)
+        .arg("-o")
+        .arg(&probe_o)
+        .arg("-march=rv32imafc")
+        .arg("-mabi=ilp32f")
+        // The flag that silently changes half these structs if it is missing.
+        .arg("-fshort-enums")
+        .arg(format!("-I{}", manifest_dir.display()));
+    for flag in sdk_cpp_flags(flags_make) {
+        cmd.arg(flag);
+    }
+    let out = cmd.output().expect("run gcc for the layout probe");
+    assert!(
+        out.status.success(),
+        "layout probe did not compile -- src/ffi.rs names something the SDK \
+         headers do not have:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let nm = toolchain_bin.join("riscv64-unknown-elf-nm");
+    let out = Command::new(&nm)
+        .arg("--print-size")
+        .arg(&probe_o)
+        .output()
+        .expect("run nm on the layout probe");
+    assert!(out.status.success(), "nm failed on the layout probe");
+
+    let mut rust = String::from(
+        "// Generated by build.rs from the vendor headers. Do not edit.\n\
+         // What the C compiler reports for the types src/ffi.rs declares.\n",
+    );
+    let mut found = 0usize;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        // "<addr> <size> <kind> <name>"
+        let mut it = line.split_whitespace();
+        let (_addr, size, _kind, name) = match (it.next(), it.next(), it.next(), it.next()) {
+            (Some(a), Some(s), Some(k), Some(n)) => (a, s, k, n),
+            _ => continue,
+        };
+        let Some(stripped) = name.strip_prefix("__probe_") else {
+            continue;
+        };
+        let size = usize::from_str_radix(size, 16).expect("nm prints sizes in hex");
+        let value = if stripped.contains("_OFF_") { size - 1 } else { size };
+        rust.push_str(&format!("pub const {stripped}: usize = {value};\n"));
+        found += 1;
+    }
+    let expected: usize = LAYOUT_CHECKS.iter().map(|(_, _, f)| f.len() + 2).sum();
+    assert_eq!(
+        found, expected,
+        "layout probe produced {found} values, expected {expected}"
+    );
+    fs::write(out_dir.join("layout.rs"), rust).expect("write layout.rs");
+}
+
+/// The `-D`/`-I` set CMake compiled the C substrate with, plus the generated
+/// `autoconf.h`.
+fn sdk_cpp_flags(flags_make: &Path) -> Vec<String> {
+    let flags = fs::read_to_string(flags_make)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", flags_make.display()));
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in flags.lines() {
+        if let Some(rest) = raw
+            .strip_prefix("C_DEFINES =")
+            .or_else(|| raw.strip_prefix("C_INCLUDES ="))
+        {
+            for tok in shell_split(rest) {
+                if seen.insert(tok.clone()) {
+                    out.push(tok);
+                }
+            }
+        } else if let Some(rest) = raw.strip_prefix("C_FLAGS =") {
+            let toks = shell_split(rest);
+            let mut it = toks.iter();
+            while let Some(tok) = it.next() {
+                if tok == "-include" {
+                    if let Some(hdr) = it.next() {
+                        out.push("-include".into());
+                        out.push(hdr.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
 }
