@@ -980,3 +980,322 @@ pub extern "C" fn vAssertCalled() -> ! {
         core::hint::spin_loop();
     }
 }
+
+// ------------------------------------------------------------------ timers
+
+use crate::timer::{PendedCall, Timer, TimerService};
+
+static mut TIMERS: TimerService = TimerService::new();
+static mut TIMER_TASK: *mut Tcb = core::ptr::null_mut();
+
+fn with_timers<R>(f: impl FnOnce(&mut TimerService) -> R) -> R {
+    let state = RiscvPort::enter_critical();
+    let r = f(unsafe { &mut *core::ptr::addr_of_mut!(TIMERS) });
+    unsafe { RiscvPort::exit_critical(state) };
+    r
+}
+
+/// # Safety
+///
+/// `name` outlives the timer; `callback` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xTimerCreate(
+    name: *const c_char,
+    period: TickType,
+    auto_reload: BaseType,
+    id: *mut c_void,
+    callback: Option<extern "C" fn(*mut Timer)>,
+) -> *mut Timer {
+    let t = Box::new(Timer {
+        name,
+        period: period.max(1),
+        auto_reload: auto_reload != PD_FALSE,
+        id,
+        callback,
+        active: false,
+        due: 0,
+    });
+    with_timers(|s| {
+        s.timers.push(t);
+        let last = s.timers.len() - 1;
+        &mut *s.timers[last] as *mut Timer
+    })
+}
+
+/// # Safety
+///
+/// `timer` must be live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pvTimerGetTimerID(timer: *const Timer) -> *mut c_void {
+    unsafe { timer.as_ref() }.map_or(core::ptr::null_mut(), |t| t.id)
+}
+
+/// Start, stop, reset, re-period or delete a timer.
+///
+/// # Safety
+///
+/// `timer` must be live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xTimerGenericCommand(
+    timer: *mut Timer,
+    command: BaseType,
+    optional_value: TickType,
+    _higher_woken: *mut BaseType,
+    _ticks_to_wait: TickType,
+) -> BaseType {
+    let now = lock(|s| s.tick_count());
+    with_timers(|s| {
+        let Some(t) = (unsafe { timer.as_mut() }) else {
+            return PD_FALSE;
+        };
+        // The FROM_ISR commands are the same operations; the difference in
+        // FreeRTOS is only which queue send is used to reach the daemon, and
+        // there is no queue here.
+        match command {
+            // START, START_DONT_TRACE, RESET, and their ISR forms.
+            0 | 1 | 2 | 6 | 7 => {
+                t.active = true;
+                // The value carries the time the command was issued.
+                let base = if optional_value == 0 {
+                    now
+                } else {
+                    optional_value as u64
+                };
+                t.due = base + t.period as u64;
+            }
+            3 | 8 => t.active = false,
+            4 | 9 => {
+                t.period = optional_value.max(1);
+                t.due = now + t.period as u64;
+                t.active = true;
+            }
+            5 => {
+                t.active = false;
+                let target = timer as *const Timer;
+                s.timers
+                    .retain(|b| !core::ptr::eq(&**b as *const Timer, target));
+            }
+            _ => {}
+        }
+        PD_TRUE
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xTimerGetTimerDaemonTaskHandle() -> *mut Tcb {
+    unsafe { TIMER_TASK }
+}
+
+/// Hand a call to the daemon, which is how an interrupt reaches a context
+/// that is allowed to block.
+#[unsafe(no_mangle)]
+pub extern "C" fn xTimerPendFunctionCall(
+    func: Option<extern "C" fn(*mut c_void, u32)>,
+    arg: *mut c_void,
+    value: u32,
+    _ticks: TickType,
+) -> BaseType {
+    let Some(func) = func else { return PD_FALSE };
+    with_timers(|s| s.pended.push(PendedCall { func, arg, value }));
+    PD_TRUE
+}
+
+/// Also spelled `xTimerPendFunctionCallFromISR`; the work is identical.
+#[unsafe(no_mangle)]
+pub extern "C" fn xTimerPendFunctionCallFromISR(
+    func: Option<extern "C" fn(*mut c_void, u32)>,
+    arg: *mut c_void,
+    value: u32,
+    _higher_woken: *mut BaseType,
+) -> BaseType {
+    xTimerPendFunctionCall(func, arg, value, 0)
+}
+
+/// The daemon task: run due timers and pended calls, then sleep until the
+/// next deadline.
+extern "C" fn timer_daemon(_arg: *mut c_void) {
+    loop {
+        let now = lock(|s| s.tick_count());
+
+        let due = with_timers(|s| s.take_due(now));
+        for t in due {
+            let cb = unsafe { t.as_ref() }.and_then(|t| t.callback);
+            if let Some(cb) = cb {
+                cb(t);
+            }
+        }
+
+        let calls = with_timers(|s| core::mem::take(&mut s.pended));
+        for c in calls {
+            (c.func)(c.arg, c.value);
+        }
+
+        // Sleep until the next deadline, but wake often enough to notice
+        // pended work that arrived meanwhile.
+        let delay = with_timers(|s| s.next_delay(now)).unwrap_or(10).clamp(1, 10);
+        vTaskDelay(delay as TickType);
+    }
+}
+
+/// Start the daemon. FreeRTOS calls this from `vTaskStartScheduler`.
+#[unsafe(no_mangle)]
+pub extern "C" fn xTimerCreateTimerTask() -> BaseType {
+    let mut handle: *mut Tcb = core::ptr::null_mut();
+    let rc = unsafe {
+        xTaskCreate(
+            Some(timer_daemon),
+            c"Tmr Svc".as_ptr(),
+            512,
+            core::ptr::null_mut(),
+            crate::MAX_PRIORITIES - 2,
+            &mut handle,
+        )
+    };
+    unsafe { TIMER_TASK = handle };
+    rc
+}
+
+// ----------------------------------------------------------- introspection
+
+/// `TaskStatus_t`, matching FreeRTOS's `task.h` field for field.
+///
+/// The shell writes an array of these and reads them back, so the layout is
+/// not ours to choose. `eCurrentState` is an enum, which `-fshort-enums`
+/// makes one byte — the padding that follows is what makes the rest line up.
+#[repr(C)]
+pub struct TaskStatus {
+    pub handle: *mut Tcb,
+    pub name: *const c_char,
+    pub task_number: UBaseType,
+    pub current_state: u8,
+    pub current_priority: UBaseType,
+    pub base_priority: UBaseType,
+    pub run_time_counter: u32,
+    pub stack_base: *const usize,
+    pub stack_high_water_mark: u16,
+}
+
+/// # Safety
+///
+/// `array` must have room for `size` entries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn uxTaskGetSystemState(
+    array: *mut TaskStatus,
+    size: UBaseType,
+    total_run_time: *mut u32,
+) -> UBaseType {
+    if !total_run_time.is_null() {
+        unsafe { *total_run_time = 0 };
+    }
+    lock(|s| {
+        let mut n = 0u32;
+        for t in s.iter() {
+            if n >= size {
+                break;
+            }
+            if t.state == TaskState::Deleted {
+                continue;
+            }
+            let handle = t as *const Tcb as *mut Tcb;
+            let running = s.current() == Some(handle);
+            unsafe {
+                array.add(n as usize).write(TaskStatus {
+                    handle,
+                    name: t.name.as_ptr() as *const c_char,
+                    task_number: t.task_number,
+                    current_state: match t.state {
+                        TaskState::Ready if running => 0,
+                        TaskState::Ready => 1,
+                        TaskState::Blocked => 2,
+                        TaskState::Suspended => 3,
+                        TaskState::Deleted => 4,
+                    },
+                    current_priority: t.priority,
+                    base_priority: t.base_priority,
+                    run_time_counter: 0,
+                    stack_base: t.stack_base(),
+                    stack_high_water_mark: 0,
+                });
+            }
+            n += 1;
+        }
+        n
+    })
+}
+
+/// Write the `ps`-style table the vendor shell prints.
+///
+/// # Safety
+///
+/// `buffer` must have room; FreeRTOS's contract is roughly 40 bytes per task,
+/// and this stays well inside that.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vTaskList(buffer: *mut c_char) {
+    if buffer.is_null() {
+        return;
+    }
+    let mut out = buffer.cast::<u8>();
+    let mut put = |bytes: &[u8]| {
+        for &b in bytes {
+            unsafe {
+                out.write(b);
+                out = out.add(1);
+            }
+        }
+    };
+    lock(|s| {
+        for t in s.iter() {
+            if t.state == TaskState::Deleted {
+                continue;
+            }
+            let running = s.current() == Some(t as *const Tcb as *mut Tcb);
+            let state = match t.state {
+                TaskState::Ready if running => b'X',
+                TaskState::Ready => b'R',
+                TaskState::Blocked => b'B',
+                TaskState::Suspended => b'S',
+                TaskState::Deleted => b'D',
+            };
+            let name = t.name.as_bytes();
+            put(&name[..name.len().min(16)]);
+            put(b"\t");
+            put(&[state]);
+            put(b"\t");
+            put(&[b'0' + (t.priority % 10) as u8]);
+            put(b"\r\n");
+        }
+    });
+    unsafe { out.write(0) };
+}
+
+/// Visit every task handle. Used by the platform's low-power bookkeeping.
+///
+/// # Safety
+///
+/// `cb` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vTaskHandleForeachFromISR(
+    cb: Option<extern "C" fn(*mut Tcb, *mut c_void)>,
+    arg: *mut c_void,
+) {
+    let Some(cb) = cb else { return };
+    // Called from an interrupt, so no lock: interrupts are already masked and
+    // taking one would re-enable them on the way out.
+    let s = unsafe { &*core::ptr::addr_of!(SCHEDULER) };
+    for t in s.iter() {
+        if t.state != TaskState::Deleted {
+            cb(t as *const Tcb as *mut Tcb, arg);
+        }
+    }
+}
+
+/// newlib's per-thread `errno`.
+///
+/// One slot rather than one per task. Nothing in this system inspects errno
+/// across a blocking call, and a shared slot is what the SDK's own newlib
+/// configuration assumes.
+#[unsafe(no_mangle)]
+pub extern "C" fn __errno() -> *mut i32 {
+    static mut ERRNO: i32 = 0;
+    core::ptr::addr_of_mut!(ERRNO)
+}

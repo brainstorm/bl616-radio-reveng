@@ -44,6 +44,7 @@ pub mod port;
 #[cfg(target_arch = "riscv32")]
 pub mod port_riscv;
 pub mod queue;
+pub mod timer;
 pub mod task;
 
 pub use port::Port;

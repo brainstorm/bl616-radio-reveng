@@ -249,6 +249,36 @@ core::arch::global_asm!(
     mret
 .endm
 
+    /* Vectored entry. mtvec points here in direct mode, so this is where a
+       trap arrives when the platform has not routed it to one of the three
+       specific handlers below. Save once, then decide: the interrupt bit is
+       the sign bit of mcause. */
+    .global freertos_risc_v_trap_handler
+    .align 4
+freertos_risc_v_trap_handler:
+    SAVE_CONTEXT
+    csrr  a0, mcause
+    bltz  a0, 2f                    /* negative: asynchronous, an interrupt */
+    li    t0, 11
+    bne   a0, t0, 3f                /* not an ecall: a real fault */
+    lw    t0, 0(sp)                 /* ecall returns past itself */
+    addi  t0, t0, 4
+    sw    t0, 0(sp)
+    call  vTaskSwitchContext
+    RESTORE_CONTEXT
+2:
+    andi  t0, a0, 0x1f              /* interrupt number */
+    li    t1, 7                     /* machine timer */
+    bne   t0, t1, 4f
+    call  bl616_rtos_tick
+    RESTORE_CONTEXT
+4:
+    call  freertos_risc_v_application_interrupt_handler
+    RESTORE_CONTEXT
+3:
+    call  bl616_rtos_fault
+    RESTORE_CONTEXT
+
     .global freertos_risc_v_exception_handler
     .align 4
 freertos_risc_v_exception_handler:
