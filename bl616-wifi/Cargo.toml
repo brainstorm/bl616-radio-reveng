@@ -24,6 +24,10 @@ smoltcp = { version = "0.14", optional = true, default-features = false, feature
     "socket-tcp",
     "socket-dhcpv4",
     "socket-icmp",
+    # Without this smoltcp silently ignores echo requests -- the handler in
+    # iface/interface/ipv4.rs is gated on it -- and the board answers ARP and
+    # serves DHCP while appearing not to respond to ping at all.
+    "auto-icmp-echo-reply",
 ] }
 
 [features]
