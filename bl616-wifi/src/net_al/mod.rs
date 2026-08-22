@@ -102,6 +102,10 @@ impl IpAddrCfg {
     fn ipv4(&self) -> (u32, u32, u32, u32) {
         (self.u[0], self.u[1], self.u[2], self.u[3])
     }
+    /// DHCP timeout the blob asked for. Retained for completeness: the client
+    /// runs asynchronously and reports through `GOT_IP`, so nothing consumes
+    /// it.
+    #[allow(dead_code)]
     fn dhcp_timeout_ms(&self) -> u32 {
         self.u[0]
     }
@@ -857,16 +861,9 @@ pub unsafe extern "C" fn net_al_ext_set_vif_ip(fvif_idx: c_int, cfg: *mut IpAddr
             0
         }
         IP_ADDR_DHCP_CLIENT => {
-            let timeout = match cfg.dhcp_timeout_ms() {
-                0 => 15_000,
-                t => t,
-            };
-            if stack::request(stack::Command::DhcpClientStart, timeout) {
-                0
-            } else {
-                stack::post_dhcp_timeout();
-                -1
-            }
+            // Asynchronous, for the same reason as net_al_ext_dhcp_connect.
+            stack::start_dhcp_client_async();
+            0
         }
         IP_ADDR_NONE => {
             unsafe {
@@ -913,13 +910,17 @@ pub extern "C" fn net_al_ext_dhcp_connect(is_api: c_int, to_ms: u32) -> c_int {
     if let Some(p) = iface::by_index(0) {
         stack::set_target(p as *mut c_void);
     }
-    let timeout = if to_ms == 0 { 15_000 } else { to_ms };
-    if stack::request(stack::Command::DhcpClientStart, timeout) {
-        0
-    } else {
-        stack::post_dhcp_timeout();
-        -1
-    }
+    // Start the client and return; do not wait for the lease.
+    //
+    // The vendor spawns a `wifi_dhcpc` task here and returns 0 immediately.
+    // This call arrives on the blob's own WPA task, so blocking it until DHCP
+    // completes stalls the task that drives the connection and delivers
+    // received frames -- the station associates and then no traffic arrives
+    // at all. The application learns the outcome from GOT_IP, which the
+    // addressing code posts.
+    let _ = to_ms;
+    stack::start_dhcp_client_async();
+    0
 }
 
 #[no_mangle]

@@ -142,6 +142,17 @@ pub fn set_target(net_if: *mut core::ffi::c_void) {
     TARGET_IF.store(net_if as usize, Ordering::Release);
 }
 
+/// Ask the poll task to run a DHCP client, without waiting for the lease.
+///
+/// The caller is usually one of the blob's own tasks, which must not be held
+/// up; the outcome reaches the application as a `GOT_IP` event instead.
+pub fn start_dhcp_client_async() {
+    if let Some(p) = iface::by_index(0) {
+        set_target(p as *mut core::ffi::c_void);
+    }
+    COMMAND.store(Command::DhcpClientStart as u8, Ordering::Release);
+}
+
 /// Tell the application an address is configured.
 pub fn post_got_ip() {
     post_ip_event(CODE_WIFI_ON_GOT_IP);
