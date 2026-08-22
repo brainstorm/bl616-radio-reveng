@@ -162,17 +162,30 @@ pub fn set_dhcpd_pool(start: u16, limit: u16) {
 /// smoltcp's view of the vendor MAC.
 pub struct WifiDevice {
     net_if: *mut NetIf,
+    /// Landing area for `rx_pop`, owned by the device so it is not a stack
+    /// temporary in `receive`.
+    scratch: alloc::boxed::Box<[u8; RX_FRAME_MAX]>,
 }
 
 impl WifiDevice {
     pub fn new(net_if: *mut NetIf) -> Self {
-        WifiDevice { net_if }
+        WifiDevice {
+            net_if,
+            scratch: alloc::boxed::Box::new([0; RX_FRAME_MAX]),
+        }
     }
 }
 
+/// A received frame on its way into smoltcp.
+///
+/// The payload lives on the heap rather than inline. An inline
+/// `[u8; RX_FRAME_MAX]` is moved twice per receive -- once out of the local in
+/// `Device::receive`, once into the token -- and smoltcp may hold more than
+/// one, which is several kilobytes of a task stack that also has to fit
+/// smoltcp's own frame processing. That is survivable while almost nothing is
+/// arriving and is not once traffic starts.
 pub struct WifiRxToken {
-    frame: [u8; RX_FRAME_MAX],
-    len: usize,
+    frame: alloc::vec::Vec<u8>,
 }
 
 pub struct WifiTxToken {
@@ -184,7 +197,7 @@ impl phy::RxToken for WifiRxToken {
     where
         F: FnOnce(&[u8]) -> R,
     {
-        f(&self.frame[..self.len])
+        f(&self.frame)
     }
 }
 
@@ -240,11 +253,13 @@ impl phy::Device for WifiDevice {
         Self: 'a;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        let mut frame = [0u8; RX_FRAME_MAX];
-        let (len, _iface) = iface::rx_pop(&mut frame)?;
+        // Reused across calls, so the big buffer is not a stack temporary.
+        let (len, _iface) = iface::rx_pop(&mut self.scratch[..])?;
         POPPED.fetch_add(1, Ordering::Relaxed);
         Some((
-            WifiRxToken { frame, len },
+            WifiRxToken {
+                frame: self.scratch[..len].to_vec(),
+            },
             WifiTxToken {
                 net_if: self.net_if,
             },
@@ -575,7 +590,9 @@ pub fn start() {
         bl616_wifi_sys::xTaskCreate(
             Some(poll_task),
             c"net".as_ptr(),
-            2048,
+            // smoltcp's frame processing is not small, and this task also
+            // runs the DHCP server.
+            4096,
             core::ptr::null_mut(),
             8,
             core::ptr::null_mut(),
