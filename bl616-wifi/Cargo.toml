@@ -76,6 +76,19 @@ embassy-net = [
     "dep:critical-section",
 ]
 
+[dev-dependencies]
+# Only the embassy example needs these; the crate itself exposes a Driver and
+# leaves the stack to the application.
+embassy-net = { version = "0.9", default-features = false, features = [
+    "proto-ipv4", "medium-ethernet", "dhcpv4", "udp", "tcp", "dns",
+    # Our smoltcp 0.14 enables managed/alloc, and the two smoltcp versions
+    # share that crate -- so embassy-net's copy must agree or its matches do
+    # not cover ManagedSlice::Owned.
+    "alloc",
+] }
+embassy-time = { version = "0.5", default-features = false }
+static_cell = "2"
+
 [[example]]
 name = "hello"
 required-features = ["panic-handler"]
@@ -91,3 +104,7 @@ required-features = ["panic-handler"]
 [[example]]
 name = "ap"
 required-features = ["panic-handler"]
+
+[[example]]
+name = "embassy_sta"
+required-features = ["panic-handler", "embassy-net"]

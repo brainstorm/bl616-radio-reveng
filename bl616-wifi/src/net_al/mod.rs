@@ -1037,6 +1037,31 @@ pub extern "C" fn tcpip_init(_initfunc: *mut c_void, _arg: *mut c_void) {}
 /// TX pool and RX ring counters, for bring-up.
 ///
 /// Returns `(tx_in_use, tx_peak, tx_exhausted, rx_accepted, rx_dropped)`.
+/// Publish an address into the blob's view of an interface.
+///
+/// The blob and the vendor API (`wifi_sta_ip4_addr_get`, and the AP's own
+/// addressing) read what `net_al_ext_get_vif_ip` reports, which is these
+/// fields. When the IP stack lives in the application -- as it does under the
+/// embassy front end -- nothing else writes them, so the application has to
+/// hand back what its stack obtained or the two disagree about the address.
+///
+/// All values are in network byte order, 0 for unset.
+pub fn set_vif_addr(index: usize, addr: u32, mask: u32, gw: u32, dns: u32) -> bool {
+    let Some(p) = iface::by_index(index) else {
+        return false;
+    };
+    unsafe {
+        (*p).ipaddr.store(addr, core::sync::atomic::Ordering::Release);
+        (*p).netmask.store(mask, core::sync::atomic::Ordering::Release);
+        (*p).gw.store(gw, core::sync::atomic::Ordering::Release);
+        (*p).dns.store(dns, core::sync::atomic::Ordering::Release);
+    }
+    if addr != 0 {
+        stack::post_got_ip();
+    }
+    true
+}
+
 pub use stack::{ping_start, ping_stats};
 
 pub fn stats() -> (u32, u32, u32, u32, u32) {
