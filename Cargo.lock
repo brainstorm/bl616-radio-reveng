@@ -87,6 +87,10 @@ name = "bl616-dhcp"
 version = "0.1.0"
 
 [[package]]
+name = "bl616-rtos"
+version = "0.1.0"
+
+[[package]]
 name = "bl616-wifi"
 version = "0.1.0"
 dependencies = [
