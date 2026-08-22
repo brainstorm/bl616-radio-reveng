@@ -37,6 +37,11 @@ time driver over the FreeRTOS tick and an executor running as an ordinary
 task — the arrangement for an embassy application. Verified as an AP: a client
 associates, leases an address and pings 6/6. See `examples/embassy_ap.rs`.
 
+`--features rust-crypto` replaces wpa_supplicant's hashing, HMAC and AES
+backend with RustCrypto, so the WPA2 handshake runs on Rust code. Verified on
+hardware and covered by 28 host tests against published vectors. WPA3's
+elliptic-curve layer stays on mbedTLS — see the engineering notes.
+
 `--features rust-net` goes further: it drops lwIP and the vendor's network
 adapter (4.1 MB of C) and runs the IP stack in Rust over smoltcp, with a DHCP
 server of its own. Verified on hardware in both modes. As an **AP**, a client
