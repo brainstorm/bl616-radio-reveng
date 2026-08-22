@@ -915,13 +915,16 @@ pub extern "C" fn net_al_dhcpd_start(net_if: *mut c_void, start: c_int, limit: c
     // Bind the stack to the interface the blob actually named.
     stack::set_target(net_if);
     stack::set_dhcpd_pool(start.max(0) as u16, limit.max(0) as u16);
-    let ok = stack::request(stack::Command::DhcpServerStart, 5_000);
-    trace!("[net_al] dhcpd_start -> {}", if ok { 0 } else { -1 });
-    if ok {
-        0
-    } else {
-        -1
+    // The interface is brought up here, as the vendor does.
+    if let Some(i) = iface::validate(net_if) {
+        i.link_up.store(true, Ordering::Release);
     }
+    stack::request(stack::Command::DhcpServerStart, 5_000);
+    // Always success, matching the vendor. The blob configures the address
+    // *after* this call, so reporting "no address yet" as a failure aborts
+    // the very step that would have supplied one.
+    trace!("[net_al] dhcpd_start -> 0");
+    0
 }
 
 #[no_mangle]

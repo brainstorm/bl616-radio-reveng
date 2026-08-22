@@ -276,6 +276,8 @@ struct Stack {
     sockets: SocketSet<'static>,
     dhcp_client: Option<smoltcp::iface::SocketHandle>,
     dhcpd: Option<Dhcpd>,
+    /// A DHCP server has been asked for but the interface had no address yet.
+    dhcpd_wanted: bool,
     net_if: *mut NetIf,
 }
 
@@ -291,6 +293,7 @@ impl Stack {
             sockets: SocketSet::new(alloc::vec::Vec::new()),
             dhcp_client: None,
             dhcpd: None,
+            dhcpd_wanted: false,
             net_if,
         }
     }
@@ -383,8 +386,40 @@ impl Stack {
         }
     }
 
+    /// Bring the DHCP server up once the interface has an address to serve
+    /// from. Called on every poll, so it costs nothing until it can succeed.
+    fn start_dhcpd_if_ready(&mut self) {
+        if !self.dhcpd_wanted || self.dhcpd.is_some() {
+            return;
+        }
+        let (addr, mask) = unsafe {
+            (
+                (*self.net_if).ipaddr.load(Ordering::Acquire),
+                (*self.net_if).netmask.load(Ordering::Acquire),
+            )
+        };
+        if addr == 0 {
+            return;
+        }
+        let packed = DHCPD_POOL.load(Ordering::Acquire);
+        let (start, limit) = ((packed >> 16) as u16, packed as u16);
+        if let Some(d) = Dhcpd::new(&mut self.sockets, addr, mask, start, limit) {
+            crate::println!(
+                "[net_al] dhcpd serving {}.{}.{}.{} pool .{}..{}",
+                addr as u8,
+                (addr >> 8) as u8,
+                (addr >> 16) as u8,
+                (addr >> 24) as u8,
+                start,
+                start + limit - 1
+            );
+            self.dhcpd = Some(d);
+        }
+    }
+
     fn poll(&mut self) {
         self.sync_addr();
+        self.start_dhcpd_if_ready();
         self.iface.poll(now(), &mut self.device, &mut self.sockets);
         if let Some(d) = self.dhcpd.as_mut() {
             d.poll(&mut self.iface, &mut self.sockets);
@@ -460,19 +495,16 @@ extern "C" fn poll_task(_arg: *mut core::ffi::c_void) {
                 RESULT.store(RESULT_OK, Ordering::Release);
             }
             x if x == Command::DhcpServerStart as u8 => {
-                let packed = DHCPD_POOL.load(Ordering::Acquire);
-                let (start, limit) = ((packed >> 16) as u16, packed as u16);
-                let self_addr = unsafe { (*stack.net_if).ipaddr.load(Ordering::Acquire) };
-                let mask = unsafe { (*stack.net_if).netmask.load(Ordering::Acquire) };
-                match Dhcpd::new(&mut stack.sockets, self_addr, mask, start, limit) {
-                    Some(d) => {
-                        stack.dhcpd = Some(d);
-                        RESULT.store(RESULT_OK, Ordering::Release);
-                    }
-                    None => RESULT.store(RESULT_FAILED, Ordering::Release),
-                }
+                // The blob starts the server before configuring the address,
+                // so "no address yet" is ordering, not failure. Remember the
+                // request; `start_dhcpd_if_ready` acts on it once an address
+                // appears.
+                stack.dhcpd_wanted = true;
+                stack.start_dhcpd_if_ready();
+                RESULT.store(RESULT_OK, Ordering::Release);
             }
             x if x == Command::DhcpServerStop as u8 => {
+                stack.dhcpd_wanted = false;
                 if let Some(d) = stack.dhcpd.take() {
                     d.close(&mut stack.sockets);
                 }
