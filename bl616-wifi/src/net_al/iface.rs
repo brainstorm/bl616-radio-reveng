@@ -214,6 +214,16 @@ static RX_TAIL: AtomicUsize = AtomicUsize::new(0);
 static RX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static RX_ACCEPTED: AtomicU32 = AtomicU32::new(0);
 
+/// Woken when a frame lands, for the embassy front end.
+///
+/// smoltcp's `Device::receive` is polled, so an empty ring simply returns
+/// `None` and the poll task tries again in 5 ms. embassy-net's is waker
+/// driven: returning `None` without arming a waker parks the executor with
+/// nothing left to wake it. So the arrival path has to signal.
+#[cfg(feature = "embassy-net")]
+pub static RX_WAKER: embassy_sync::waitqueue::AtomicWaker =
+    embassy_sync::waitqueue::AtomicWaker::new();
+
 /// Copy a received frame into the ring.
 ///
 /// Called from the blob's RX path, so it copies and returns rather than
@@ -244,6 +254,8 @@ pub unsafe fn rx_push(iface: *mut NetIf, frame: *const u8, len: usize) -> bool {
 
     RX_HEAD.store(head.wrapping_add(1), Ordering::Release);
     RX_ACCEPTED.fetch_add(1, Ordering::Relaxed);
+    #[cfg(feature = "embassy-net")]
+    RX_WAKER.wake();
     true
 }
 

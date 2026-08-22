@@ -97,6 +97,15 @@ static IN_USE_PEAK: AtomicU32 = AtomicU32::new(0);
 /// Allocations that found the pool empty.
 static EXHAUSTED: AtomicU32 = AtomicU32::new(0);
 
+/// Woken when a buffer returns to the pool.
+///
+/// embassy-net's `Driver::transmit` must arm a waker when it declines for want
+/// of space, or the stack never retries. The blob frees buffers from its own
+/// tasks and from interrupt context, which is exactly where this fires.
+#[cfg(feature = "embassy-net")]
+pub static TX_WAKER: embassy_sync::waitqueue::AtomicWaker =
+    embassy_sync::waitqueue::AtomicWaker::new();
+
 fn pool_base() -> *mut TxBuf {
     ptr::addr_of_mut!(TX_POOL) as *mut TxBuf
 }
@@ -174,8 +183,18 @@ pub unsafe fn free(buf: *mut TxBuf) {
             (*cur).len = 0;
         }
         FREE_MASK.fetch_or(1 << slot, Ordering::AcqRel);
+        #[cfg(feature = "embassy-net")]
+        TX_WAKER.wake();
         cur = next;
     }
+}
+
+/// Buffers available right now.
+///
+/// embassy's `transmit` must decide before building the frame, unlike
+/// smoltcp's, which can allocate inside `consume`.
+pub fn free_count() -> u32 {
+    FREE_MASK.load(Ordering::Relaxed).count_ones()
 }
 
 /// Buffers in flight, peak in flight, and allocations that found none free.

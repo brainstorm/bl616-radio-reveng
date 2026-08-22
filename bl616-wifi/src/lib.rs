@@ -69,6 +69,8 @@ pub mod sta;
 /// Rust implementation of the vendor stack's network interface, replacing
 /// lwIP. See the module docs and the engineering notes for what is done and what is not.
 #[cfg(feature = "rust-net")]
+#[cfg(feature = "embassy-net")]
+pub mod embassy_rt;
 pub mod net_al;
 
 #[cfg(feature = "alloc")]

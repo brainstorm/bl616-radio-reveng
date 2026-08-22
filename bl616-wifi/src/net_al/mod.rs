@@ -66,6 +66,8 @@ macro_rules! trace_n {
     }};
 }
 
+#[cfg(feature = "embassy-net")]
+pub mod embassy;
 pub mod dhcpd;
 pub mod iface;
 pub mod stack;
@@ -918,7 +920,7 @@ pub extern "C" fn net_al_ext_dhcp_connect(is_api: c_int, to_ms: u32) -> c_int {
     // received frames -- the station associates and then no traffic arrives
     // at all. The application learns the outcome from GOT_IP, which the
     // addressing code posts.
-    let _ = to_ms;
+    let _ = (is_api, to_ms);
     stack::start_dhcp_client_async();
     0
 }

@@ -4,6 +4,12 @@
 
 //! The IP stack: smoltcp over the vendor MAC.
 //!
+//! Not driven under the `embassy-net` feature: there the application brings
+//! its own embassy-net stack and this module keeps only the bookkeeping the
+//! blob's `net_al_ext_*` entry points need. The rest stays compiled so both
+//! front ends are type-checked in every build, and `--gc-sections` drops it
+//! from the image because nothing references it.
+//!
 //! # Ownership, and why there are no locks
 //!
 //! The [`Stack`] is owned outright by one FreeRTOS task, [`poll_task`].
@@ -21,6 +27,8 @@
 //! ICMP echo is answered by `Interface::poll` without a socket, so a station
 //! or soft-AP replies to ping as soon as it has an address. That is the
 //! cheapest end-to-end proof the whole path works.
+
+#![cfg_attr(feature = "embassy-net", allow(dead_code))]
 
 use core::ffi::c_int;
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
@@ -148,6 +156,7 @@ static TARGET_IF: AtomicUsize = AtomicUsize::new(0);
 /// soft-AP) and both calls would pass a `RUNNING` check and spawn a task of
 /// their own. Two poll tasks then drive the same interface, allocate a
 /// `Stack` each, and wedge the application behind them.
+#[cfg(not(feature = "embassy-net"))]
 static SPAWNED: AtomicU32 = AtomicU32::new(0);
 
 /// Post a command and block until the poll task answers or `timeout_ms`
@@ -735,6 +744,13 @@ extern "C" fn poll_task(_arg: *mut core::ffi::c_void) {
 /// Start the IP stack task. Called once the blob has added an interface.
 ///
 /// Safe to call repeatedly; only the first caller wins.
+/// The RX ring has one consumer. Under the embassy front end that consumer is
+/// the application's embassy-net stack, so this task must not exist -- two
+/// poppers would each see half the frames.
+#[cfg(feature = "embassy-net")]
+pub fn start() {}
+
+#[cfg(not(feature = "embassy-net"))]
 pub fn start() {
     if SPAWNED
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
@@ -757,4 +773,5 @@ pub fn start() {
 }
 
 extern crate alloc;
+#[cfg(not(feature = "embassy-net"))]
 use bl616_wifi_sys;
