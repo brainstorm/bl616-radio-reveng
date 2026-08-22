@@ -86,6 +86,10 @@ static DHCPD_POOL: AtomicU32 = AtomicU32::new(0);
 /// Set once the poll task is running, so requests made before that fail fast
 /// rather than hanging.
 static RUNNING: AtomicU32 = AtomicU32::new(0);
+/// Frames handed to smoltcp, so a ring that fills without draining is
+/// distinguishable from one nothing is arriving in.
+pub(crate) static POPPED: AtomicU32 = AtomicU32::new(0);
+
 /// Interface the blob has named, or 0 for "not yet told".
 ///
 /// Binding to whichever interface merely exists first is wrong: the station
@@ -238,6 +242,7 @@ impl phy::Device for WifiDevice {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let mut frame = [0u8; RX_FRAME_MAX];
         let (len, _iface) = iface::rx_pop(&mut frame)?;
+        POPPED.fetch_add(1, Ordering::Relaxed);
         Some((
             WifiRxToken { frame, len },
             WifiTxToken {
@@ -481,6 +486,12 @@ extern "C" fn poll_task(_arg: *mut core::ffi::c_void) {
                     s.set_addr(addr, mask, gw);
                     s.applied = (addr, mask, gw);
                 }
+                #[cfg(feature = "net-trace")]
+                crate::println!(
+                    "[net_al] stack bound to slot {:?} addr={:08x}",
+                    iface::index_of(p),
+                    addr
+                );
                 stack = Some(s);
             }
         }
