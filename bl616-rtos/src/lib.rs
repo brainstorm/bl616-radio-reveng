@@ -35,6 +35,9 @@
 extern crate alloc;
 
 pub mod port;
+/// The RV32 port. Only builds for the target: it is assembly.
+#[cfg(target_arch = "riscv32")]
+pub mod port_riscv;
 pub mod queue;
 pub mod task;
 
