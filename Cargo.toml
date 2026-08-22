@@ -4,7 +4,7 @@
 
 [workspace]
 resolver = "2"
-members = ["bl616-dhcp", "bl616-wifi-sys", "bl616-wifi"]
+members = ["bl616-crypto", "bl616-dhcp", "bl616-wifi-sys", "bl616-wifi"]
 # xtask is a *host* crate and lives in its own workspace so that the
 # riscv32 default target in .cargo/config.toml does not apply to it.
 exclude = ["xtask"]
