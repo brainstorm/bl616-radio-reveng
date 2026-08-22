@@ -58,6 +58,16 @@ fn app() -> ! {
     };
     println!("[embassy] mac {}", MacAddr(wifi.sta_mac()));
 
+    println!("[embassy] heap free {} bytes", runtime::free_heap());
+
+    // Scan before joining. This is not decoration: the station example does
+    // it too, and joining straight after MgmrDone without one fails to
+    // associate -- the supplicant wants the AP in its scan table, and the
+    // radio wants the settling time.
+    if let Err(e) = wifi.scan_and_print(10_000) {
+        println!("[embassy] scan failed: {e} (continuing)");
+    }
+
     // Associate only. `dhcp: false` stops the blob starting its own client,
     // which would race embassy-net for the same exchange.
     let config = StaConfig::wpa2(SSID, PSK).without_dhcp();

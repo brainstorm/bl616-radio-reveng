@@ -31,6 +31,12 @@ and pinged `192.168.4.1` 5/5 at ~2.9 ms. STA: joined a WPA2 network with a
 full EAPOL 1-4 handshake, took `192.168.87.22/24` by DHCP, answered 6/6 pings
 and held -48 dBm.
 
+`--features embassy-net` presents the MAC as an
+[embassy-net](https://github.com/embassy-rs/embassy) `Driver` instead, with a
+time driver over the FreeRTOS tick and an executor running as an ordinary
+task — the arrangement for an embassy application. Verified as an AP: a client
+associates, leases an address and pings 6/6. See `examples/embassy_ap.rs`.
+
 `--features rust-net` goes further: it drops lwIP and the vendor's network
 adapter (4.1 MB of C) and runs the IP stack in Rust over smoltcp, with a DHCP
 server of its own. Verified on hardware in both modes. As an **AP**, a client

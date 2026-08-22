@@ -81,6 +81,10 @@ embassy-net = [
 # leaves the stack to the application.
 embassy-net = { version = "0.9", default-features = false, features = [
     "proto-ipv4", "medium-ethernet", "dhcpv4", "udp", "tcp", "dns",
+    # Same trap as our own smoltcp: without this the board answers ARP and
+    # serves DHCP while appearing dead to ping. Each smoltcp instance needs
+    # it enabled separately, and embassy-net has its own.
+    "auto-icmp-echo-reply",
     # Our smoltcp 0.14 enables managed/alloc, and the two smoltcp versions
     # share that crate -- so embassy-net's copy must agree or its matches do
     # not cover ManagedSlice::Owned.
@@ -107,4 +111,8 @@ required-features = ["panic-handler"]
 
 [[example]]
 name = "embassy_sta"
+required-features = ["panic-handler", "embassy-net"]
+
+[[example]]
+name = "embassy_ap"
 required-features = ["panic-handler", "embassy-net"]
