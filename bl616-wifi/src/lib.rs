@@ -74,8 +74,16 @@ pub mod sta;
 #[cfg(feature = "rust-crypto")]
 use bl616_crypto as _;
 
+/// The blobs' RTOS abstraction layer, replacing the vendor's rtos_al.c.
+#[cfg(feature = "rust-rtos")]
+pub mod rtos_al;
+
 #[cfg(feature = "embassy-net")]
 pub mod embassy_rt;
+/// The vendor stack's network adapter, in Rust. Needs an IP stack behind it,
+/// so it follows `rust-net` rather than being unconditional -- without that
+/// feature the crate has no smoltcp to build against.
+#[cfg(feature = "rust-net")]
 pub mod net_al;
 
 #[cfg(feature = "alloc")]

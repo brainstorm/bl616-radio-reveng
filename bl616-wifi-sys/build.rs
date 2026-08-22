@@ -221,6 +221,15 @@ fn build_csdk(project_dir: &Path, sdk: &Path, toolchain_bin: &Path, chip: &str, 
             "crypto_mbedtls_misc.c.obj",
         );
     }
+
+    if env::var_os("CARGO_FEATURE_RUST_RTOS").is_some() {
+        drop_archive_member(
+            project_dir,
+            toolchain_bin,
+            "lib/libmacsw_os_adapter.a",
+            "rtos_al.c.obj",
+        );
+    }
 }
 
 /// Remove one object from a built archive.

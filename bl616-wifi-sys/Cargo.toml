@@ -21,6 +21,8 @@ bindgen = ["dep:bindgen"]
 # provide those symbols instead. The archive is linked with --whole-archive,
 # so the object has to go rather than merely be out-competed.
 rust-crypto = []
+# Drop the vendor's rtos_al.c so bl616-wifi can provide those symbols.
+rust-rtos = []
 # Put the console on the BL616's own USB peripheral (CherryUSB CDC-ACM)
 # instead of UART0. On boards whose USB-C goes straight into the chip — the
 # Sipeed M0S Dock, for one — this is the difference between needing an

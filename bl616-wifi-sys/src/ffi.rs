@@ -255,6 +255,92 @@ unsafe extern "C" {
     pub fn wifi_mgmr_set_country_code(country_code: *mut c_char) -> c_int;
 }
 
+
+// --- FreeRTOS queues and semaphores
+//
+// The macro-only spellings (`xSemaphoreTake`, `xQueueCreate`, ...) do not
+// exist as symbols; every one is a macro over the handful of generic
+// functions below, which is what the RTOS adapter has to call.
+
+/// Opaque queue/semaphore handle. `SemaphoreHandle_t` is the same type.
+#[repr(C)]
+pub struct QueueDefinition {
+    _opaque: [u8; 0],
+}
+pub type QueueHandle_t = *mut QueueDefinition;
+pub type SemaphoreHandle_t = QueueHandle_t;
+
+/// `queueQUEUE_TYPE_BASE`, the type argument for a plain queue.
+pub const QUEUE_TYPE_BASE: u8 = 0;
+/// `queueQUEUE_TYPE_BINARY_SEMAPHORE`.
+pub const QUEUE_TYPE_BINARY_SEMAPHORE: u8 = 3;
+/// `queueSEND_TO_BACK`, the copy position for a normal send.
+pub const QUEUE_SEND_TO_BACK: BaseType_t = 0;
+
+unsafe extern "C" {
+    pub fn xQueueGenericCreate(
+        uxQueueLength: UBaseType_t,
+        uxItemSize: UBaseType_t,
+        ucQueueType: u8,
+    ) -> QueueHandle_t;
+    pub fn xQueueCreateMutex(ucQueueType: u8) -> QueueHandle_t;
+    pub fn xQueueCreateCountingSemaphore(
+        uxMaxCount: UBaseType_t,
+        uxInitialCount: UBaseType_t,
+    ) -> QueueHandle_t;
+    pub fn vQueueDelete(xQueue: QueueHandle_t);
+    pub fn xQueueGenericSend(
+        xQueue: QueueHandle_t,
+        pvItemToQueue: *const c_void,
+        xTicksToWait: TickType_t,
+        xCopyPosition: BaseType_t,
+    ) -> BaseType_t;
+    pub fn xQueueGenericSendFromISR(
+        xQueue: QueueHandle_t,
+        pvItemToQueue: *const c_void,
+        pxHigherPriorityTaskWoken: *mut BaseType_t,
+        xCopyPosition: BaseType_t,
+    ) -> BaseType_t;
+    pub fn xQueueGiveFromISR(
+        xQueue: QueueHandle_t,
+        pxHigherPriorityTaskWoken: *mut BaseType_t,
+    ) -> BaseType_t;
+    pub fn xQueueReceive(
+        xQueue: QueueHandle_t,
+        pvBuffer: *mut c_void,
+        xTicksToWait: TickType_t,
+    ) -> BaseType_t;
+    pub fn xQueueReceiveFromISR(
+        xQueue: QueueHandle_t,
+        pvBuffer: *mut c_void,
+        pxHigherPriorityTaskWoken: *mut BaseType_t,
+    ) -> BaseType_t;
+    pub fn xQueueSemaphoreTake(xQueue: QueueHandle_t, xTicksToWait: TickType_t) -> BaseType_t;
+    pub fn uxQueueMessagesWaiting(xQueue: QueueHandle_t) -> UBaseType_t;
+    pub fn uxQueueMessagesWaitingFromISR(xQueue: QueueHandle_t) -> UBaseType_t;
+    pub fn xQueueIsQueueEmptyFromISR(xQueue: QueueHandle_t) -> BaseType_t;
+    pub fn xQueueIsQueueFullFromISR(xQueue: QueueHandle_t) -> BaseType_t;
+
+    // --- tasks, beyond what the runtime already uses
+    pub fn xTaskGetHandle(pcNameToQuery: *const c_char) -> TaskHandle_t;
+    pub fn vTaskPrioritySet(xTask: TaskHandle_t, uxNewPriority: UBaseType_t);
+    pub fn vTaskSetTaskNumber(xTask: TaskHandle_t, uxHandle: UBaseType_t);
+    pub fn eTaskGetState(xTask: TaskHandle_t) -> u8;
+    pub fn ulTaskGenericNotifyTake(
+        uxIndexToWaitOn: UBaseType_t,
+        xClearCountOnExit: BaseType_t,
+        xTicksToWait: TickType_t,
+    ) -> u32;
+    pub fn vTaskGenericNotifyGiveFromISR(
+        xTaskToNotify: TaskHandle_t,
+        uxIndexToNotify: UBaseType_t,
+        pxHigherPriorityTaskWoken: *mut BaseType_t,
+    );
+    pub fn vTaskEnterCritical();
+    pub fn vTaskExitCritical();
+    pub fn xTaskGetTickCountFromISR() -> TickType_t;
+}
+
 // --------------------------------------------------------- layout assertions
 //
 // What the C compiler says these types look like, measured from the vendor

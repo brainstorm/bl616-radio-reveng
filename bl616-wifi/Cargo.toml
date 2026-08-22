@@ -63,6 +63,9 @@ net-trace = ["rust-net"]
 # Stage 4: wpa_supplicant's hashing, HMAC and AES come from RustCrypto rather
 # than mbedTLS. All 34 entry points are replaced together -- see bl616-crypto.
 rust-crypto = ["dep:bl616-crypto", "bl616-wifi-sys/rust-crypto"]
+# Stage 3, first step: the blobs' rtos_* layer in Rust. Still forwards to
+# FreeRTOS -- this moves the seam, not yet the scheduler behind it.
+rust-rtos = ["bl616-wifi-sys/rust-rtos"]
 # Present the MAC as an embassy-net Driver instead of driving smoltcp
 # ourselves. The application brings its own embassy-net stack; this crate
 # supplies the device, the time driver and an executor hosted on FreeRTOS.

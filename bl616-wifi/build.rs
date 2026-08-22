@@ -85,6 +85,12 @@ fn main() {
             println!("cargo:rustc-link-arg=-Wl,--undefined={sym}");
         }
     }
+
+    if env::var_os("CARGO_FEATURE_RUST_RTOS").is_some() {
+        for sym in RTOS_EXPORTS {
+            println!("cargo:rustc-link-arg=-Wl,--undefined={sym}");
+        }
+    }
 }
 
 /// The symbols `crypto_mbedtls_misc.c` defines, which `bl616-crypto` replaces.
@@ -133,4 +139,58 @@ const CRYPTO_EXPORTS: &[&str] = &[
     "sha256_vector",
     "sha384_vector",
     "sha512_vector",
+];
+
+
+/// The symbols `rtos_al.c` defines, which `bl616-wifi::rtos_al` replaces.
+///
+/// The twelve `fhost_*_priority` entries are `const int` data rather than
+/// functions, and matter just as much: the blobs read them to decide what
+/// priority to create their tasks at. Dropping one would leave a task at
+/// whatever the linker happened to leave there.
+const RTOS_EXPORTS: &[&str] = &[
+    "rtos_al_ms2tick",
+    "rtos_now",
+    "rtos_task_get_handle",
+    "rtos_get_task_handle",
+    "rtos_task_create",
+    "rtos_task_delete",
+    "rtos_task_suspend",
+    "rtos_task_init_notification",
+    "rtos_task_wait_notification",
+    "rtos_task_notify",
+    "rtos_priority_set",
+    "rtos_queue_create",
+    "rtos_queue_delete",
+    "rtos_queue_is_empty",
+    "rtos_queue_is_full",
+    "rtos_queue_cnt",
+    "rtos_queue_write",
+    "rtos_queue_read",
+    "rtos_semaphore_create",
+    "rtos_semaphore_delete",
+    "rtos_semaphore_get_count",
+    "rtos_semaphore_wait",
+    "rtos_semaphore_signal",
+    "rtos_mutex_create",
+    "rtos_mutex_delete",
+    "rtos_mutex_lock",
+    "rtos_mutex_unlock",
+    "rtos_protect",
+    "rtos_unprotect",
+    "rtos_trace_task",
+    "rtos_trace_mem",
+    "vApplicationStackOverflowHook",
+    "fhost_tcpip_priority",
+    "fhost_wifi_priority",
+    "fhost_wifi_priority_high",
+    "fhost_cntrl_priority",
+    "fhost_rx_priority",
+    "fhost_tx_priority",
+    "fhost_wpa_priority",
+    "fhost_ipc_priority",
+    "fhost_iperf_priority",
+    "fhost_connect_priority",
+    "fhost_tg_priority",
+    "fhost_ping_priority",
 ];
