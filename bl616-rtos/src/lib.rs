@@ -34,6 +34,11 @@
 
 extern crate alloc;
 
+/// The FreeRTOS C API, bound to the scheduler. Target only: it depends on
+/// the port.
+#[cfg(target_arch = "riscv32")]
+pub mod api;
+pub mod heap;
 pub mod port;
 /// The RV32 port. Only builds for the target: it is assembly.
 #[cfg(target_arch = "riscv32")]
