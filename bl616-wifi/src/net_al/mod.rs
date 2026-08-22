@@ -457,7 +457,26 @@ pub unsafe extern "C" fn net_al_tx_req(req: TxReq) -> c_int {
         unsafe { txbuf::free(req.net_buf as *mut TxBuf) };
         return -1;
     }
-    unsafe { fhost_tx_start(req.net_if, req.net_buf, req.cfm_cb, req.cfm_cb_arg) }
+    // `fhost_tx_req_do`, not `fhost_tx_start`. The latter is the network
+    // stack's own entry point and takes four arguments; this path has to
+    // carry `type`, `buf_rx` and `no_cck` through as well. Forwarding to
+    // `fhost_tx_start` instead loses them and the frame is accepted but never
+    // completed -- the buffer simply stays in flight forever.
+    //
+    // The vendor's fallback for payloads outside shared RAM does not apply:
+    // ours always are, by construction, so `net_buf_tx_all_shram` is always
+    // true and only this branch is ever taken.
+    unsafe {
+        fhost_tx_req_do(
+            req.net_if,
+            req.net_buf,
+            req.type_,
+            req.cfm_cb,
+            req.cfm_cb_arg,
+            req.buf_rx,
+            req.no_cck,
+        )
+    }
 }
 
 /// IEEE 802.3 header: destination, source, ethertype.
@@ -484,6 +503,17 @@ fn eloop_l2_event_id(name: &[u8]) -> c_int {
 }
 
 extern "C" {
+    /// Submit a frame with its full transmit context. Lives in the blob.
+    fn fhost_tx_req_do(
+        net_if: *mut c_void,
+        net_buf: *mut c_void,
+        type_: c_int,
+        cfm_cb: *mut c_void,
+        cfm_cb_arg: *mut c_void,
+        buf_rx: *mut c_void,
+        no_cck: c_int,
+    ) -> c_int;
+
     /// Deliver a frame to wpa_supplicant's event loop. Lives in
     /// libwpa_supplicant.
     fn eloop_event_commit(event_type: c_int, request: *const c_char, req_len: c_int) -> c_int;
