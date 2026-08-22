@@ -16,6 +16,26 @@ use crate::net::{Ipv4, MacAddr};
 use crate::sta::Akm;
 use crate::Wifi;
 
+/// The soft-AP's interface index, as the vendor's `MGMR_VIF_AP`.
+#[cfg(feature = "rust-net")]
+const AP_VIF_IDX: core::ffi::c_int = 1;
+
+/// Build the vendor IP configuration for this AP.
+#[cfg(feature = "rust-net")]
+fn sys_ip_cfg(config: &ApConfig<'_>) -> crate::net_al::IpAddrCfg {
+    crate::net_al::IpAddrCfg {
+        mode: 1, // IP_ADDR_STATIC_IPV4
+        default_output: false,
+        // addr, mask, gw, dns -- the AP is its own gateway and resolver.
+        u: [
+            config.address.as_raw(),
+            config.netmask.as_raw(),
+            config.address.as_raw(),
+            config.address.as_raw(),
+        ],
+    }
+}
+
 /// How to run the soft-AP.
 ///
 /// [`ApConfig::wpa2`] gives you a WPA2-PSK AP on channel 6 at 192.168.4.1
@@ -112,6 +132,14 @@ impl<'a> ApConfig<'a> {
     }
 }
 
+impl ApConfig<'_> {
+    /// Whether the AP's own addressing should be applied.
+    #[cfg_attr(not(feature = "rust-net"), allow(dead_code))]
+    fn use_ipcfg(&self) -> bool {
+        !self.address.is_unspecified()
+    }
+}
+
 impl Wifi {
     /// Start the soft-AP and wait until it is beaconing.
     ///
@@ -165,10 +193,29 @@ impl Wifi {
             return Err(Error::Vendor(rc));
         }
 
-        match event::wait(
+        let started = event::wait(
             &[Event::ApStarted, Event::ApStopped, Event::ParamsError],
             config.timeout_ms,
-        ) {
+        );
+
+        // Assert the address we asked for.
+        //
+        // `wifi_mgmr_ap_start` takes `ap_ipaddr` but only ever calls
+        // net_al_ext_set_vif_ip with IP_ADDR_NONE, so with lwIP replaced
+        // nothing else ever tells the network stack what the soft-AP's
+        // address is -- and the DHCP server has nothing to serve from. The
+        // vendor's own AP path applies it the same way, from the parameters
+        // the caller supplied.
+        #[cfg(feature = "rust-net")]
+        if matches!(started, Some(Event::ApStarted)) && config.use_ipcfg() {
+            let mut cfg = sys_ip_cfg(config);
+            let rc = unsafe { crate::net_al::net_al_ext_set_vif_ip(AP_VIF_IDX, &mut cfg) };
+            if rc != 0 {
+                return Err(Error::Vendor(rc));
+            }
+        }
+
+        match started {
             Some(Event::ApStarted) => Ok(()),
             Some(Event::ParamsError) => Err(Error::InvalidArgument),
             Some(_) => Err(Error::ConnectionFailed),
