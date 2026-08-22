@@ -10,15 +10,25 @@
 //! without a station associating to real hardware, and a wire-format mistake
 //! here is invisible until a client silently fails to configure itself.
 //!
-//! [`super::dhcpd::Dhcpd`] wraps this with a UDP socket.
+//! `bl616-wifi`'s `net_al::dhcpd` wraps this with a UDP socket.
+//!
+//! It builds for the host as well as the target, so the wire format is
+//! covered by unit tests in `tests/`. That matters more here than elsewhere:
+//! this code cannot be exercised without a station associating to real
+//! hardware, and a wire-format mistake is invisible until a client silently
+//! fails to configure itself.
+
+#![no_std]
 
 /// Leases the pool can hold.
 const MAX_LEASES: usize = 8;
 /// Lease time handed to clients, in seconds.
 const LEASE_SECS: u32 = 2 * 60 * 60;
 
-const SERVER_PORT: u16 = 67;
-const CLIENT_PORT: u16 = 68;
+/// The port a server listens on.
+pub const SERVER_PORT: u16 = 67;
+/// The port replies are sent to.
+pub const CLIENT_PORT: u16 = 68;
 
 const OP_BOOTREQUEST: u8 = 1;
 const OP_BOOTREPLY: u8 = 2;
@@ -46,10 +56,10 @@ const DHCP_RELEASE: u8 = 7;
 const BOOTP_MIN: usize = 240;
 
 #[derive(Clone, Copy, Default)]
-struct Lease {
-    mac: [u8; 6],
+pub struct Lease {
+    pub mac: [u8; 6],
     /// Host number within the subnet, 0 when the slot is free.
-    host: u8,
+    pub host: u8,
 }
 
 
@@ -86,7 +96,15 @@ impl Leases {
         })
     }
 
+    /// Build a reply for one request. Returns its length, or `None` when the
+    /// message is not ours to answer.
     pub fn handle(&mut self, req: &[u8], reply: &mut [u8; 548]) -> Option<usize> {
+        // Everything below indexes the fixed header, so establish it exists
+        // first. Callers that read from a socket have usually checked, but a
+        // public entry point cannot assume it.
+        if req.len() < BOOTP_MIN {
+            return None;
+        }
         if req[0] != OP_BOOTREQUEST || req[1] != HTYPE_ETHERNET {
             return None;
         }

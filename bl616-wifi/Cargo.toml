@@ -15,6 +15,7 @@ keywords = ["bl616", "bouffalo", "wifi", "riscv", "embedded"]
 
 [dependencies]
 bl616-wifi-sys = { path = "../bl616-wifi-sys", version = "0.1.0" }
+bl616-dhcp = { path = "../bl616-dhcp" }
 smoltcp = { version = "0.14", optional = true, default-features = false, features = [
     "alloc",
     "medium-ethernet",
