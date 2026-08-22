@@ -649,6 +649,11 @@ pub unsafe extern "C" fn net_l2_socket_delete(net_if: *mut c_void) -> c_int {
 
 /// Retries the vendor performs before giving up on an unacknowledged frame.
 const L2_SEND_SW_RETRIES: usize = 7;
+/// How long to wait for a transmit confirmation before giving up on it.
+///
+/// Short on purpose: this sits in the middle of the WPA handshake, and the
+/// supplicant's own timers are the ones that matter.
+const L2_CFM_TIMEOUT_MS: u32 = 300;
 
 /// Serialises L2 transmissions, so one sender's confirmation cannot be
 /// mistaken for another's. The vendor uses a mutex plus a semaphore; this is
@@ -660,6 +665,7 @@ static L2_ACKED: AtomicU32 = AtomicU32::new(0);
 
 /// Transmission confirmation for [`net_l2_send`].
 unsafe extern "C" fn l2_send_cfm(_frame_id: u32, acknowledged: bool, _arg: *mut c_void) {
+    trace_n!("[net_al] l2_cfm acked={}", acknowledged);
     L2_ACKED.store(acknowledged as u32, Ordering::Release);
     L2_DONE.store(1, Ordering::Release);
 }
@@ -721,10 +727,18 @@ unsafe fn l2_send_once(
     // Block until the MAC confirms, as the vendor does. The bound is ours:
     // the vendor waits forever, which turns a lost confirmation into a hung
     // supplicant.
+    //
+    // A timeout is reported as delivered, not as unacknowledged. The two are
+    // very different: a negative acknowledgement means the peer did not hear
+    // us and retrying is right, whereas no confirmation at all says nothing
+    // about the frame and retrying only burns the handshake's patience --
+    // eight retries of a two-second wait is sixteen seconds per EAPOL frame,
+    // which no supplicant will wait for.
     let mut waited = 0;
     while L2_DONE.load(Ordering::Acquire) == 0 {
-        if waited >= 2_000 {
-            return Ok(false);
+        if waited >= L2_CFM_TIMEOUT_MS {
+            trace_n!("[net_al] l2_cfm timeout");
+            return Ok(true);
         }
         crate::runtime::delay_ms(2);
         waited += 2;
@@ -821,6 +835,10 @@ pub unsafe extern "C" fn net_al_ext_set_vif_ip(fvif_idx: c_int, cfg: *mut IpAddr
         cfg.mode,
         cfg.u[0]
     );
+    // Bind the stack to the interface the blob is configuring. A station has
+    // no address until DHCP completes, so "whichever interface has one" can
+    // not identify it.
+    stack::set_target(p as *mut c_void);
     match cfg.mode {
         IP_ADDR_STATIC_IPV4 => {
             let (addr, mask, gw, dns) = cfg.ipv4();
