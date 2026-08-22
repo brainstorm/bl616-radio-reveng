@@ -800,6 +800,12 @@ pub unsafe extern "C" fn net_al_ext_set_vif_ip(fvif_idx: c_int, cfg: *mut IpAddr
                 (*p).gw.store(gw, Ordering::Release);
                 (*p).dns.store(dns, Ordering::Release);
             }
+            // An address appearing is an address appearing, however it was
+            // configured; the vendor's netif status callback does not
+            // distinguish either.
+            if addr != 0 {
+                stack::post_got_ip();
+            }
             0
         }
         IP_ADDR_DHCP_CLIENT => {
@@ -810,6 +816,7 @@ pub unsafe extern "C" fn net_al_ext_set_vif_ip(fvif_idx: c_int, cfg: *mut IpAddr
             if stack::request(stack::Command::DhcpClientStart, timeout) {
                 0
             } else {
+                stack::post_dhcp_timeout();
                 -1
             }
         }
@@ -857,6 +864,7 @@ pub extern "C" fn net_al_ext_dhcp_connect(_is_api: c_int, to_ms: u32) -> c_int {
     if stack::request(stack::Command::DhcpClientStart, timeout) {
         0
     } else {
+        stack::post_dhcp_timeout();
         -1
     }
 }

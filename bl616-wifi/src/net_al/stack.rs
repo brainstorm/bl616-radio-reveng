@@ -22,6 +22,7 @@
 //! or soft-AP replies to ping as soon as it has an address. That is the
 //! cheapest end-to-end proof the whole path works.
 
+use core::ffi::c_int;
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 use smoltcp::iface::{Config, Interface, SocketSet};
@@ -37,6 +38,28 @@ use crate::runtime;
 
 /// MTU the vendor MAC presents.
 const MTU: usize = 1500;
+
+/// `CODE_WIFI_ON_*`, from `wifi_mgmr_ext.h`.
+const CODE_WIFI_ON_GOT_IP: c_int = 7;
+const CODE_WIFI_ON_LOST_IP: c_int = 26;
+const CODE_WIFI_ON_GOT_IP_TIMEOUT: c_int = 28;
+
+extern "C" {
+    /// Post a WiFi event to the application's async bus.
+    ///
+    /// In the vendor this is reached from lwIP's netif status callback; with
+    /// lwIP gone, the addressing code has to post it directly. Without it
+    /// `Wifi::connect` waits out its timeout even after DHCP has succeeded,
+    /// because `GotIp` is the event it is waiting for.
+    fn platform_post_event(catalogue: c_int, code: c_int, value: c_int);
+}
+
+/// Tell the application an address appeared or went away.
+fn post_ip_event(code: c_int) {
+    // EV_WIFI; the vendor's implementation ignores the catalogue argument and
+    // posts to EV_WIFI regardless, but pass it correctly anyway.
+    unsafe { platform_post_event(2, code, 0) };
+}
 
 // ------------------------------------------------------------ command queue
 
@@ -113,6 +136,16 @@ pub fn request(cmd: Command, timeout_ms: u32) -> bool {
 /// means; we should not guess.
 pub fn set_target(net_if: *mut core::ffi::c_void) {
     TARGET_IF.store(net_if as usize, Ordering::Release);
+}
+
+/// Tell the application an address is configured.
+pub fn post_got_ip() {
+    post_ip_event(CODE_WIFI_ON_GOT_IP);
+}
+
+/// Tell the application DHCP gave up.
+pub fn post_dhcp_timeout() {
+    post_ip_event(CODE_WIFI_ON_GOT_IP_TIMEOUT);
 }
 
 /// Set the soft-AP DHCP pool before requesting [`Command::DhcpServerStart`].
@@ -322,11 +355,13 @@ impl Stack {
                 self.set_addr(addr, mask, gw);
                 self.applied = (addr, mask, gw);
                 unsafe { (*self.net_if).dns.store(dns, Ordering::Release) };
+                post_ip_event(CODE_WIFI_ON_GOT_IP);
                 true
             }
             Some(dhcpv4::Event::Deconfigured) => {
                 self.iface.update_ip_addrs(|a| a.clear());
                 unsafe { (*self.net_if).ipaddr.store(0, Ordering::Release) };
+                post_ip_event(CODE_WIFI_ON_LOST_IP);
                 false
             }
             None => unsafe { (*self.net_if).ipaddr.load(Ordering::Acquire) != 0 },
