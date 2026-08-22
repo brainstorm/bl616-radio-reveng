@@ -462,6 +462,8 @@ pub unsafe extern "C" fn net_al_tx_req(req: TxReq) -> c_int {
 
 /// IEEE 802.3 header: destination, source, ethertype.
 const ETH_HDR_LEN: usize = 14;
+/// Interface MTU, matching what the vendor sets on its netif.
+const MTU: usize = 1500;
 
 /// Shared fallback queue, for an interface the supplicant does not recognise.
 const ELOOP_EVT_WPA_L2_DATA: c_int = 3;
@@ -615,11 +617,97 @@ pub unsafe extern "C" fn net_l2_socket_delete(net_if: *mut c_void) -> c_int {
     }
 }
 
+/// Retries the vendor performs before giving up on an unacknowledged frame.
+const L2_SEND_SW_RETRIES: usize = 7;
+
+/// Serialises L2 transmissions, so one sender's confirmation cannot be
+/// mistaken for another's. The vendor uses a mutex plus a semaphore; this is
+/// the same arrangement with atomics, since the callback may run in interrupt
+/// context where a mutex would not be safe.
+static L2_BUSY: AtomicU32 = AtomicU32::new(0);
+static L2_DONE: AtomicU32 = AtomicU32::new(0);
+static L2_ACKED: AtomicU32 = AtomicU32::new(0);
+
+/// Transmission confirmation for [`net_l2_send`].
+unsafe extern "C" fn l2_send_cfm(_frame_id: u32, acknowledged: bool, _arg: *mut c_void) {
+    L2_ACKED.store(acknowledged as u32, Ordering::Release);
+    L2_DONE.store(1, Ordering::Release);
+}
+
+/// Send one raw frame and wait for its confirmation.
+///
+/// Returns `Err(())` if the frame could not be submitted, else the
+/// acknowledgement the MAC reported.
+unsafe fn l2_send_once(
+    net_if: *mut c_void,
+    i: &iface::NetIf,
+    data: *const u8,
+    data_len: usize,
+    ethertype: u16,
+    dst_addr: *const u8,
+) -> Result<bool, ()> {
+    let with_header = !dst_addr.is_null();
+    let total = data_len + if with_header { ETH_HDR_LEN } else { 0 };
+    if total > txbuf::MAX_FRAME {
+        return Err(());
+    }
+
+    let Some(buf) = txbuf::alloc() else {
+        return Err(());
+    };
+    unsafe {
+        let frame = (*buf).frame_ptr();
+        if with_header {
+            // Only when the caller names a destination: otherwise the payload
+            // already carries its own header and adding one would duplicate it.
+            core::ptr::copy_nonoverlapping(dst_addr, frame, 6);
+            core::ptr::copy_nonoverlapping(i.mac.as_ptr(), frame.add(6), 6);
+            let et = ethertype.to_be_bytes();
+            *frame.add(12) = et[0];
+            *frame.add(13) = et[1];
+            core::ptr::copy_nonoverlapping(data, frame.add(ETH_HDR_LEN), data_len);
+        } else {
+            core::ptr::copy_nonoverlapping(data, frame, data_len);
+        }
+        (*buf).len = total as u16;
+    }
+
+    L2_DONE.store(0, Ordering::Release);
+    L2_ACKED.store(0, Ordering::Release);
+
+    let rc = unsafe {
+        fhost_tx_start(
+            net_if,
+            buf as *mut c_void,
+            l2_send_cfm as *mut c_void,
+            core::ptr::null_mut(),
+        )
+    };
+    if rc != 0 {
+        unsafe { txbuf::free(buf) };
+        return Err(());
+    }
+
+    // Block until the MAC confirms, as the vendor does. The bound is ours:
+    // the vendor waits forever, which turns a lost confirmation into a hung
+    // supplicant.
+    let mut waited = 0;
+    while L2_DONE.load(Ordering::Acquire) == 0 {
+        if waited >= 2_000 {
+            return Ok(false);
+        }
+        crate::runtime::delay_ms(2);
+        waited += 2;
+    }
+    Ok(L2_ACKED.load(Ordering::Acquire) != 0)
+}
+
 /// Send a raw IEEE 802.3 frame — the supplicant's EAPOL path.
 ///
-/// Builds the 14-byte ethernet header ahead of `data` and submits it. `ack`
-/// reports only that the frame was queued: the vendor's own implementation
-/// does not wait for a transmit confirmation here either.
+/// Blocks until the frame is confirmed and reports the real acknowledgement,
+/// retrying like the vendor. The supplicant decides whether to retransmit
+/// from `ack`, so reporting "queued" as "acknowledged" would break the WPA
+/// handshake in a way that looks like packet loss.
 #[no_mangle]
 pub unsafe extern "C" fn net_l2_send(
     net_if: *mut c_void,
@@ -634,51 +722,56 @@ pub unsafe extern "C" fn net_l2_send(
         ethertype,
         data_len
     );
+
     let Some(i) = iface::validate(net_if) else {
         return -1;
     };
-    if data.is_null() || data_len <= 0 {
+    if data.is_null() || data_len <= 0 || data_len as usize >= MTU {
         return -1;
     }
-    let payload_len = data_len as usize;
-    if payload_len + 14 > txbuf::MAX_FRAME {
+    if !i.link_up.load(Ordering::Acquire) {
         return -1;
     }
 
-    let Some(buf) = txbuf::alloc() else {
-        return -1;
-    };
-    unsafe {
-        let frame = (*buf).frame_ptr();
-        if dst_addr.is_null() {
-            // Broadcast when the caller does not name a destination.
-            core::ptr::write_bytes(frame, 0xff, 6);
-        } else {
-            core::ptr::copy_nonoverlapping(dst_addr, frame, 6);
+    // One L2 transmission at a time: the confirmation carries no identity, so
+    // overlapping sends could not tell their completions apart.
+    let mut spins = 0;
+    while L2_BUSY
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        crate::runtime::delay_ms(2);
+        spins += 2;
+        if spins >= 2_000 {
+            return -1;
         }
-        core::ptr::copy_nonoverlapping(i.mac.as_ptr(), frame.add(6), 6);
-        let et = ethertype.to_be_bytes();
-        *frame.add(12) = et[0];
-        *frame.add(13) = et[1];
-        core::ptr::copy_nonoverlapping(data, frame.add(14), payload_len);
-        (*buf).len = (payload_len + 14) as u16;
     }
 
-    let rc = unsafe {
-        fhost_tx_start(
-            net_if,
-            buf as *mut c_void,
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-        )
-    };
-    if rc != 0 {
-        unsafe { txbuf::free(buf) };
+    let mut result = -1;
+    for _ in 0..=L2_SEND_SW_RETRIES {
+        match unsafe { l2_send_once(net_if, i, data, data_len as usize, ethertype, dst_addr) } {
+            Err(()) => {
+                result = -1;
+                break;
+            }
+            Ok(true) => {
+                if !ack.is_null() {
+                    unsafe { *ack = true };
+                }
+                result = 0;
+                break;
+            }
+            Ok(false) => {
+                if !ack.is_null() {
+                    unsafe { *ack = false };
+                }
+                result = 0;
+            }
+        }
     }
-    if !ack.is_null() {
-        unsafe { *ack = rc == 0 };
-    }
-    rc
+
+    L2_BUSY.store(0, Ordering::Release);
+    result
 }
 
 // ------------------------------------------------------- IP address / DHCP
