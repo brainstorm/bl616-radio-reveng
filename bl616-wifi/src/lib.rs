@@ -62,6 +62,7 @@ pub mod cstr;
 pub mod error;
 pub mod event;
 pub mod net;
+pub mod rng;
 pub mod runtime;
 pub mod shell;
 pub mod sta;

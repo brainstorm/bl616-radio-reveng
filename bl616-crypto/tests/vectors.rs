@@ -369,3 +369,24 @@ fn a_null_context_is_an_error_not_a_crash() {
         crypto_cipher_deinit(core::ptr::null_mut());
     }
 }
+
+#[test]
+fn the_rust_wrappers_agree_with_the_c_entry_points() {
+    // Same primitives, two signatures; a divergence here would be invisible
+    // until something used the wrong one.
+    let mut via_c = [0u8; 32];
+    digest(sha256_vector, b"abc", &mut via_c);
+    assert_eq!(bl616_crypto::hash::sha256(b"abc"), via_c[..32]);
+
+    let key = vec![0x0bu8; 20];
+    let data = b"Hi There";
+    let mut via_c = [0u8; 32];
+    unsafe {
+        hmac_sha256(key.as_ptr(), 20, data.as_ptr(), data.len(), via_c.as_mut_ptr());
+    }
+    assert_eq!(bl616_crypto::hash::hmac_sha256(&key, data), via_c);
+
+    let mut via_c = [0u8; 20];
+    digest(sha1_vector, b"abc", &mut via_c);
+    assert_eq!(bl616_crypto::hash::sha1(b"abc"), via_c[..20]);
+}

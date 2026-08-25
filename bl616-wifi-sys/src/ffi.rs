@@ -159,6 +159,13 @@ unsafe extern "C" {
     pub fn bflb_device_get_by_name(name: *const c_char) -> *mut bflb_device_s;
     pub fn shell_init_with_task(shell: *mut bflb_device_s);
 
+    /// Hardware true random number generator.
+    ///
+    /// Returns 0 on success. The BL616's TRNG is a real entropy source, which
+    /// matters for anything generating keys rather than just seeding a port
+    /// number.
+    pub fn bflb_trng_readlen(data: *mut u8, len: u32) -> c_int;
+
     // --- C runtime, as provided by the SDK's allocator
     pub fn malloc(size: usize) -> *mut c_void;
     pub fn free(ptr: *mut c_void);

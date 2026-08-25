@@ -537,3 +537,53 @@ pub extern "C" fn crypto_global_init() -> c_int {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn crypto_global_deinit() {}
+
+/// The same primitives with an ordinary Rust signature.
+///
+/// The entry points in the crate root exist for wpa_supplicant and speak C. A
+/// Rust caller -- an ssh-stamp `HashHal`, say -- should not have to build
+/// pointer arrays to hash a slice. These live in a module rather than the root
+/// because the C names are already taken, and they are separate functions
+/// rather than re-exports because the C ones cannot fail and these should not
+/// pretend to.
+pub mod hash {
+    use digest::{Digest, KeyInit, Mac};
+    use hmac::Hmac;
+
+    /// SHA-256 of `data`.
+    pub fn sha256(data: &[u8]) -> [u8; 32] {
+        let mut h = sha2::Sha256::new();
+        h.update(data);
+        let out = h.finalize();
+        let mut mac = [0u8; 32];
+        mac.copy_from_slice(&out);
+        mac
+    }
+
+    /// HMAC-SHA-256 of `data` under `key`.
+    ///
+    /// Any key length is valid; one longer than the block is hashed down,
+    /// which is the behaviour RFC 4231's sixth test vector pins.
+    pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+        let mut h =
+            <Hmac<sha2::Sha256> as KeyInit>::new_from_slice(key).expect("HMAC takes any key length");
+        Mac::update(&mut h, data);
+        let out = h.finalize().into_bytes();
+        let mut mac = [0u8; 32];
+        mac.copy_from_slice(&out);
+        mac
+    }
+
+    /// SHA-1 of `data`.
+    ///
+    /// Present because WPA2 and older SSH key formats still need it, not
+    /// because anything new should.
+    pub fn sha1(data: &[u8]) -> [u8; 20] {
+        let mut h = sha1::Sha1::new();
+        h.update(data);
+        let out = h.finalize();
+        let mut mac = [0u8; 20];
+        mac.copy_from_slice(&out);
+        mac
+    }
+}
