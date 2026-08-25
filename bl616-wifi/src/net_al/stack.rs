@@ -49,26 +49,21 @@ use crate::runtime;
 /// MTU the vendor MAC presents.
 const MTU: usize = 1500;
 
-/// `CODE_WIFI_ON_*`, from `wifi_mgmr_ext.h`.
-const CODE_WIFI_ON_GOT_IP: c_int = 7;
-const CODE_WIFI_ON_LOST_IP: c_int = 26;
-const CODE_WIFI_ON_GOT_IP_TIMEOUT: c_int = 28;
-
-extern "C" {
-    /// Post a WiFi event to the application's async bus.
-    ///
-    /// In the vendor this is reached from lwIP's netif status callback; with
-    /// lwIP gone, the addressing code has to post it directly. Without it
-    /// `Wifi::connect` waits out its timeout even after DHCP has succeeded,
-    /// because `GotIp` is the event it is waiting for.
-    fn platform_post_event(catalogue: c_int, code: c_int, value: c_int);
-}
+use super::events;
+use super::events::{CODE_WIFI_ON_GOT_IP, CODE_WIFI_ON_LOST_IP, CODE_WIFI_ON_GOT_IP_TIMEOUT};
 
 /// Tell the application an address appeared or went away.
+///
+/// In the vendor this is reached from lwIP's netif status callback; with lwIP
+/// gone, the addressing code posts it directly. Without it `Wifi::connect`
+/// waits out its timeout even after DHCP has succeeded, because `GotIp` is
+/// the event it is waiting for.
 fn post_ip_event(code: c_int) {
-    // EV_WIFI; the vendor's implementation ignores the catalogue argument and
-    // posts to EV_WIFI regardless, but pass it correctly anyway.
-    unsafe { platform_post_event(2, code, 0) };
+    match code {
+        events::CODE_WIFI_ON_GOT_IP => events::post_got_ip(),
+        events::CODE_WIFI_ON_LOST_IP => events::post_lost_ip(),
+        _ => events::post_dhcp_timeout(),
+    }
 }
 
 // ------------------------------------------------------------ command queue

@@ -81,9 +81,10 @@ pub mod rtos_al;
 #[cfg(feature = "embassy-net")]
 pub mod embassy_rt;
 /// The vendor stack's network adapter, in Rust. Needs an IP stack behind it,
-/// so it follows `rust-net` rather than being unconditional -- without that
-/// feature the crate has no smoltcp to build against.
-#[cfg(feature = "rust-net")]
+/// so it follows `rust-net-core`: the vendor adapter and lwIP have to be gone
+/// before this can replace them. Which IP stack sits on top -- ours or the
+/// application's -- is a separate choice.
+#[cfg(feature = "rust-net-core")]
 pub mod net_al;
 
 #[cfg(feature = "alloc")]

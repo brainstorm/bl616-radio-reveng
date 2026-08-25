@@ -68,10 +68,22 @@ macro_rules! trace_n {
 
 #[cfg(feature = "embassy-net")]
 pub mod embassy;
-pub mod dhcpd;
+pub mod events;
 pub mod iface;
-pub mod stack;
 pub mod txbuf;
+
+// Two IP-stack front ends, and `net_al` is written against whichever is
+// compiled in. The smoltcp one owns a poll task and sockets; the stub keeps
+// only the bookkeeping, for applications that bring their own stack and must
+// not be made to link a second smoltcp.
+#[cfg(feature = "rust-net")]
+pub mod dhcpd;
+#[cfg(feature = "rust-net")]
+pub mod stack;
+
+#[cfg(not(feature = "rust-net"))]
+#[path = "stack_stub.rs"]
+pub mod stack;
 
 use core::ffi::{c_char, c_int, c_void};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -1062,6 +1074,9 @@ pub fn set_vif_addr(index: usize, addr: u32, mask: u32, gw: u32, dns: u32) -> bo
     true
 }
 
+/// Pinging outward needs an ICMP socket, so it belongs to the smoltcp front
+/// end. An application with its own stack pings with its own stack.
+#[cfg(feature = "rust-net")]
 pub use stack::{ping_start, ping_stats};
 
 pub fn stats() -> (u32, u32, u32, u32, u32) {
