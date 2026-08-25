@@ -108,8 +108,8 @@ fn app() -> ! {
             embassy_net::new(driver, Config::dhcpv4(Default::default()), resources, seed);
 
         // The runner *is* the stack: without it polling, nothing moves.
-        spawner.must_spawn(net_runner(runner));
-        spawner.must_spawn(net(stack));
+        spawner.spawn(net_runner(runner).expect("task pool exhausted"));
+        spawner.spawn(net(stack).expect("task pool exhausted"));
     })
 }
 

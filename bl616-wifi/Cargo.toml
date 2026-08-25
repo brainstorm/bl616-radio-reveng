@@ -24,12 +24,14 @@ embassy-net-driver = { version = "0.2", optional = true }
 embassy-time-driver = { version = "0.2", optional = true, features = ["tick-hz-1_000"] }
 embassy-time-queue-utils = { version = "0.1", optional = true, features = ["generic-queue-32"] }
 critical-section = { version = "1", optional = true, features = ["restore-state-bool"] }
-embassy-sync = { version = "0.6", optional = true }
+embassy-sync = { version = "0.8", optional = true }
 # No arch feature: the stock riscv32 executor parks the hart in WFI, which is
 # wrong inside a FreeRTOS task. We drive raw::Executor and supply __pender.
-embassy-executor = { version = "0.7", optional = true, default-features = false, features = [
-    "task-arena-size-8192",
-] }
+# No platform feature: the stock riscv32 executor parks the hart in WFI, which
+# is wrong inside a FreeRTOS task, so `embassy_rt` drives `raw::Executor` and
+# supplies `__pender` itself. 0.10 dropped the task arena, so tasks are
+# statically allocated by the macro and there is no size to pick.
+embassy-executor = { version = "0.10", optional = true, default-features = false }
 smoltcp = { version = "0.14", optional = true, default-features = false, features = [
     "alloc",
     "medium-ethernet",

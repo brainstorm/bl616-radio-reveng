@@ -129,15 +129,15 @@ fn app() -> ! {
         let seed = runtime::uptime_ms().wrapping_mul(0x9E37_79B9) ^ u64::from(addr[3]);
         let (stack, runner) = embassy_net::new(driver, Config::ipv4_static(v4), resources, seed);
 
-        spawner.must_spawn(net_runner(runner));
-        spawner.must_spawn(dhcp_server(
+        spawner.spawn(net_runner(runner).expect("task pool exhausted"));
+        spawner.spawn(dhcp_server(
             stack,
             u32::from_le_bytes(addr),
             u32::from_le_bytes(mask),
             pool_start,
             pool_limit,
-        ));
-        spawner.must_spawn(heartbeat());
+        ).expect("task pool exhausted"));
+        spawner.spawn(heartbeat().expect("task pool exhausted"));
     })
 }
 
