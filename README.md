@@ -37,6 +37,11 @@ time driver over the FreeRTOS tick and an executor running as an ordinary
 task — the arrangement for an embassy application. Verified as an AP: a client
 associates, leases an address and pings 6/6. See `examples/embassy_ap.rs`.
 
+`--features rust-rtos` replaces the vendor's RTOS adapter — the 31 functions
+and 12 priority constants the WiFi blobs use instead of calling FreeRTOS — with
+Rust. A full FreeRTOS replacement lives on the `stage3-rust-scheduler` branch;
+it links but does not boot, and the engineering notes says why.
+
 `--features rust-crypto` replaces wpa_supplicant's hashing, HMAC and AES
 backend with RustCrypto, so the WPA2 handshake runs on Rust code. Verified on
 hardware and covered by 28 host tests against published vectors. WPA3's

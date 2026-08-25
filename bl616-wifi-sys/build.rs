@@ -404,11 +404,6 @@ fn emit_link_args(link_txt: &Path, build_dir: &Path, out_dir: &Path, toolchain_b
 
     let tokens = shell_split(&line);
     let drop_c_net = env::var_os("CARGO_FEATURE_RUST_NET").is_some();
-    // Stage 3: the Rust scheduler supplies every FreeRTOS symbol the rest of
-    // the system references, so the archive goes entirely -- unlike the
-    // crypto and rtos_al swaps, which removed one object each, nothing in
-    // this one survives.
-    let drop_freertos = env::var_os("CARGO_FEATURE_RUST_SCHED").is_some();
     let mut args = Vec::new();
     let mut skip_next = false;
 
@@ -437,9 +432,6 @@ fn emit_link_args(link_txt: &Path, build_dir: &Path, out_dir: &Path, toolchain_b
                 .iter()
                 .any(|a| tok.ends_with(a))
         {
-            continue;
-        }
-        if drop_freertos && tok.ends_with("libfreertos.a") {
             continue;
         }
         // Archive paths are relative to the CMake build directory, and the

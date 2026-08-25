@@ -92,11 +92,6 @@ fn main() {
         }
     }
 
-    if env::var_os("CARGO_FEATURE_RUST_SCHED").is_some() {
-        for sym in SCHED_EXPORTS {
-            println!("cargo:rustc-link-arg=-Wl,--undefined={sym}");
-        }
-    }
 }
 
 /// The symbols `crypto_mbedtls_misc.c` defines, which `bl616-crypto` replaces.
@@ -199,80 +194,4 @@ const RTOS_EXPORTS: &[&str] = &[
     "fhost_connect_priority",
     "fhost_tg_priority",
     "fhost_ping_priority",
-];
-
-
-/// The FreeRTOS symbols `bl616-rtos` provides.
-///
-/// Anchored for the same reason as the others: these are `#[no_mangle]`
-/// functions in an rlib, and the ones the C substrate only reaches through a
-/// pointer -- or not at all in a given build -- are otherwise fair game for
-/// `--gc-sections`. `xTaskIncrementTick` is the one that matters most: it is
-/// called from assembly, which the linker cannot see, so without an anchor
-/// the tick handler calls into a hole.
-const SCHED_EXPORTS: &[&str] = &[
-    "vTaskSwitchContext",
-    "xTaskIncrementTick",
-    "xTaskCreate",
-    "vTaskDelete",
-    "vTaskDelay",
-    "vTaskStartScheduler",
-    "xTaskGetCurrentTaskHandle",
-    "xTaskGetHandle",
-    "xTaskGetTickCount",
-    "xTaskGetTickCountFromISR",
-    "xTaskGetSchedulerState",
-    "vTaskSuspendAll",
-    "xTaskResumeAll",
-    "vTaskEnterCritical",
-    "vTaskExitCritical",
-    "vTaskPrioritySet",
-    "uxTaskPriorityGet",
-    "eTaskGetState",
-    "pcTaskGetName",
-    "vTaskSetTaskNumber",
-    "uxTaskGetNumberOfTasks",
-    "uxTaskGetSystemState",
-    "vTaskList",
-    "vTaskHandleForeachFromISR",
-    "vTaskSetThreadLocalStoragePointerAndDelCallback",
-    "pvTaskGetThreadLocalStoragePointer",
-    "xTaskGenericNotify",
-    "ulTaskGenericNotifyTake",
-    "vTaskGenericNotifyGiveFromISR",
-    "xQueueGenericCreate",
-    "xQueueCreateMutex",
-    "xQueueCreateMutexStatic",
-    "xQueueCreateCountingSemaphore",
-    "vQueueDelete",
-    "xQueueGenericReset",
-    "xQueueGenericSend",
-    "xQueueGenericSendFromISR",
-    "xQueueGiveFromISR",
-    "xQueueReceive",
-    "xQueueReceiveFromISR",
-    "xQueueSemaphoreTake",
-    "xQueueTakeMutexRecursive",
-    "xQueueGiveMutexRecursive",
-    "uxQueueMessagesWaiting",
-    "uxQueueMessagesWaitingFromISR",
-    "xQueueIsQueueEmptyFromISR",
-    "xQueueIsQueueFullFromISR",
-    "xTimerCreate",
-    "xTimerGenericCommand",
-    "xTimerGetTimerDaemonTaskHandle",
-    "xTimerPendFunctionCall",
-    "xTimerCreateTimerTask",
-    "pvTimerGetTimerID",
-    "pvPortMalloc",
-    "vPortFree",
-    "vAssertCalled",
-    "__errno",
-    "freertos_risc_v_trap_handler",
-    "freertos_risc_v_exception_handler",
-    "freertos_risc_v_interrupt_handler",
-    "freertos_risc_v_mtimer_interrupt_handler",
-    "pxCurrentTCB",
-    "xCriticalNesting",
-    "TrapNetCounter",
 ];
