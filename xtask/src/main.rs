@@ -58,7 +58,9 @@ bl616-wifi build helper
 
 USAGE:
     cargo xtask build   --example <name> [--features <list>] [--debug]
+    cargo xtask build   --elf <path>
     cargo xtask flash   --example <name> [--features <list>] [--port <dev>] [--baud <rate>] [--erase-all]
+    cargo xtask flash   --elf <path> [--port <dev>] [--baud <rate>] [--erase-all]
     cargo xtask monitor [--port <dev>] [--baud <rate>]
     cargo xtask setup
 
@@ -83,7 +85,26 @@ struct Artifacts {
 }
 
 fn cmd_build(args: &[String]) -> Result<Artifacts, String> {
-    let example = flag(args, "--example").ok_or("missing --example <name>")?;
+    // `--elf` post-processes a binary somebody else built. An application
+    // living outside this workspace -- ssh-stamp, say -- links its own
+    // firmware and still needs the bootheader written and the image packed,
+    // which is what everything below `objcopy` does.
+    if let Some(path) = flag(args, "--elf") {
+        let elf = PathBuf::from(&path);
+        if !elf.is_file() {
+            return Err(format!("no ELF at {}", elf.display()));
+        }
+        let root = workspace_root();
+        let sdk = find_sdk(&root)?;
+        let board = env::var("BL616_BOARD").unwrap_or_else(|_| DEFAULT_BOARD.into());
+        let name = elf
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "firmware".into());
+        return post_process(&root, &sdk, &board, &elf, &name);
+    }
+
+    let example = flag(args, "--example").ok_or("missing --example <name> or --elf <path>")?;
     let release = !args.iter().any(|a| a == "--debug");
     let root = workspace_root();
     let sdk = find_sdk(&root)?;
@@ -115,13 +136,29 @@ fn cmd_build(args: &[String]) -> Result<Artifacts, String> {
     }
 
     // 2. ELF -> raw image.
-    let dir = root.join("target/bl616").join(&example);
+    post_process(&root, &sdk, &board, &elf, &example)
+}
+
+/// Turn a linked ELF into a flashable image.
+///
+/// `objcopy` to a raw binary, then the vendor's `bflb_fw_post_proc` to write
+/// the bootheader the boot ROM reads. Without that header the chip does not
+/// start, which is why an application outside this workspace cannot simply
+/// flash its own ELF.
+fn post_process(
+    root: &Path,
+    sdk: &Path,
+    board: &str,
+    elf: &Path,
+    name: &str,
+) -> Result<Artifacts, String> {
+    let dir = root.join("target/bl616").join(name);
     fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let bin = dir.join(format!("{example}.bin"));
+    let bin = dir.join(format!("{name}.bin"));
     run(
         Command::new("riscv64-unknown-elf-objcopy")
             .arg("-Obinary")
-            .arg(&elf)
+            .arg(elf)
             .arg(&bin),
         "convert the ELF to a raw image",
     )?;
@@ -141,7 +178,7 @@ fn cmd_build(args: &[String]) -> Result<Artifacts, String> {
             .arg("--appkeys=shared")
             .arg(format!(
                 "--brdcfgdir={}",
-                sdk.join("bsp/board").join(&board).join("config").display()
+                sdk.join("bsp/board").join(board).join("config").display()
             )),
         "post-process the flash image",
     )?;
