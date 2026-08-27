@@ -206,11 +206,26 @@ pub fn run(init: impl FnOnce(embassy_executor::Spawner)) -> ! {
 
         let now = runtime::uptime_ms();
         let due = next_expiration(now);
-        let wait_ms = due.saturating_sub(now).min(BACKSTOP_MS as u64) as u32;
 
-        if PENDING.load(Ordering::Acquire) || wait_ms == 0 {
+        // Work arrived while polling: poll again at once. This is bounded,
+        // because the poll consumes what made it pending.
+        if PENDING.load(Ordering::Acquire) {
             continue;
         }
+
+        // Never zero. A deadline that is due or overdue leaves `due <= now`,
+        // and returning to the top without sleeping made this task runnable
+        // for ever: it spun at its FreeRTOS priority, starved everything
+        // below it -- the idle task, the console -- and burned the core. The
+        // symptom was a board that printed happily until the application
+        // registered its first timer and then went silent while the radio
+        // carried on, which is a confusing way to find a busy loop.
+        //
+        // Sleeping a single tick instead costs one wake per millisecond in
+        // the worst case and gives the rest of the system its turn.
+        let wait_ms = due
+            .saturating_sub(now)
+            .clamp(1, u64::from(BACKSTOP_MS)) as u32;
         unsafe {
             // Clear the count on the way out so each wait consumes one
             // notification rather than returning immediately forever.

@@ -61,6 +61,12 @@ macro_rules! main {
             $crate::runtime::start($app)
         }
     };
+    ($app:path, stack = $words:expr) => {
+        #[no_mangle]
+        pub extern "C" fn main() -> ::core::ffi::c_int {
+            $crate::runtime::start_with_stack($app, $words)
+        }
+    };
 }
 
 /// Bring up board, radio and network stack, then start the scheduler and run
@@ -68,6 +74,21 @@ macro_rules! main {
 ///
 /// Prefer [`main!`], which declares the entry point for you.
 pub fn start(app: fn() -> !) -> ! {
+    start_with_stack(app, APP_STACK_WORDS)
+}
+
+/// As [`start`], with a stack size for the application task.
+///
+/// [`APP_STACK_WORDS`] suits an application whose locals are small. It does
+/// not suit one that puts large buffers on the stack: an SSH server with an
+/// 8 KiB receive buffer and a 4 KiB transmit buffer needs 12 KiB before its
+/// own frames, which overruns the default silently. The symptom is a board
+/// that prints its way through bring-up and then stops at the first call into
+/// the code holding those buffers, with the radio dying some time later as
+/// the corruption spreads -- so it looks like a hang in the wrong place.
+///
+/// Stack is cheap here and the failure is expensive: prefer a generous size.
+pub fn start_with_stack(app: fn() -> !, app_stack_words: u32) -> ! {
     unsafe {
         sys::board_init();
 
@@ -90,7 +111,7 @@ pub fn start(app: fn() -> !) -> ! {
         spawn(
             app_task,
             c"app".as_ptr(),
-            APP_STACK_WORDS,
+            app_stack_words,
             app as *mut c_void,
             APP_PRIORITY,
         );
