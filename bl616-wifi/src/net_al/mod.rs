@@ -2,44 +2,25 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `net_al`: the vendor WiFi stack's network interface, implemented in Rust.
+//! The vendor stack's network adapter, in Rust.
 //!
-//! This is Stage 1 of replacing the C substrate. With `--features rust-net`,
-//! `bl616-wifi-sys` holds `liblwip.a` (462 symbols, 3.6 MB) and
-//! `libwifi6_lwip_adapter.a` (187 symbols, 466 KB) back from the link, and
-//! what follows supplies the 24 entry points the blob actually calls, plus
-//! three small shims the supplicant wants.
+//! The blobs reach the network through ~24 `net_al_*` entry points, all of
+//! which take opaque `void *` handles they never dereference -- so Rust is
+//! free to represent buffers and interfaces however it likes. This replaces
+//! `wifi6_lwip_adapter/net_al.c`, which is worth reading before changing
+//! anything here.
 //!
-//! # Why this is possible at all
+//! Two things are load-bearing and easy to get wrong:
 //!
-//! `net_al_if_t`, `net_al_rx_t` and `net_al_tx_t` are `void *` and the blob
-//! **never dereferences them** — it only hands them back. The vendor pins them
-//! to lwIP types in `net_def.h`; nothing else does. So the representation is
-//! ours to choose, and this module chooses fixed arrays over allocation, which
-//! also means every handle the blob returns can be validated before use.
+//! * **TX payloads must sit in shared RAM**, because `net_buf_tx_info` hands
+//!   segment addresses straight to the MAC for DMA. See the `txbuf` module.
+//! * **EAPOL does not travel through the IP stack.** wpa_supplicant receives
+//!   it on its own event loop, keyed by interface name, so the names must be
+//!   `wl1`/`wl2` exactly and `net_if_get_name` must return the length.
 //!
-//! # What is not negotiable
-//!
-//! * TX payloads must live in shared RAM — see [`txbuf`].
-//! * 388 bytes of headroom ahead of every frame, and the first segment must
-//!   carry the whole IEEE 802.3 header.
-//! * `net_buf_tx_info`'s `headroom_len` is a **wrapping negative delta**
-//!   (`headroom_ptr - frame_ptr`), not a length. The vendor computes it as
-//!   `end_payload - start_payload` on `uint32_t` and the blob adds it back to
-//!   the frame pointer; getting the sign wrong points the MAC at the wrong
-//!   memory.
-//! * The RX callback runs in the blob's context and must not block.
-//!
-//! # Status
-//!
-//! The buffer, interface and RX layers are complete. The IP stack on top
-//! (smoltcp) and the DHCP server that AP mode needs are the remaining work —
-//! see the engineering notes.
+//! Every function here is called by the blobs, so the safety contract is
+//! theirs: valid handles, and lengths that match the buffers behind them.
 
-// Every `unsafe extern "C"` below is an entry point the vendor blob calls
-// under the contract in `net_al.h`, restated at the top of this module:
-// pointers come from the blob and are valid for the call. Repeating that as a
-// `# Safety` section on each of thirty functions would add noise, not safety.
 #![allow(clippy::missing_safety_doc)]
 
 /// Report a `net_al` call, with the `net-trace` feature.
@@ -943,7 +924,7 @@ pub extern "C" fn net_al_ext_dhcp_disconnect() {
     stack::request(stack::Command::DhcpClientStop, 2_000);
 }
 
-/// Start the soft-AP's DHCP server. See [`dhcpd`].
+/// Start the soft-AP's DHCP server.
 #[no_mangle]
 pub extern "C" fn net_al_dhcpd_start(net_if: *mut c_void, start: c_int, limit: c_int) -> c_int {
     trace!("[net_al] dhcpd_start start={} limit={}", start, limit);

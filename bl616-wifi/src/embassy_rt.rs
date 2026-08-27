@@ -5,18 +5,10 @@
 //! Hosting embassy on FreeRTOS: a time driver, a critical section, and an
 //! executor that runs as an ordinary task.
 //!
-//! embassy-net needs an executor and a time driver, and neither has to wait
-//! for the FreeRTOS replacement in Stage 3 — an executor is perfectly happy
-//! as one task among others. When that stage lands, only the three `sys::`
-//! calls below change.
-//!
-//! # Why not `arch-riscv32`
-//!
-//! embassy-executor ships a RISC-V executor whose run loop parks the hart in
-//! `wfi`. That is right on bare metal and wrong here: it halts the core rather
-//! than yielding, so every other FreeRTOS task waits on an interrupt to free
-//! it. This drives [`embassy_executor::raw::Executor`] instead and blocks on a
-//! task notification, which is what a well-behaved task does.
+//! The stock `arch-riscv32` executor parks the hart in `wfi`, which halts the
+//! core instead of yielding and starves every other FreeRTOS task. This
+//! drives [`embassy_executor::raw::Executor`] and blocks on a task
+//! notification instead.
 //!
 //! # Why the pender cannot simply notify
 //!
@@ -31,7 +23,7 @@
 //! * inside a critical section, neither — just the flag.
 //!
 //! Correctness still does not rest on getting that right. The pender always
-//! sets [`PENDING`] first, which is safe from any context, and the executor
+//! sets its pending flag first, which is safe from any context, and the executor
 //! waits with a bounded timeout, so the worst a misjudgement can cost is
 //! latency.
 

@@ -10,8 +10,7 @@
 //! The BL616 is a RV32IMAFCP (T-Head E907) part with an on-chip 802.11ax
 //! radio. Bouffalo ships the MAC, PHY/RF and WiFi-manager layers only as
 //! prebuilt archives, so this crate is a safe Rust surface over the vendor
-//! stack rather than a from-scratch driver — see the engineering notes in the repository
-//! for why that is currently the only honest option, and what it costs.
+//! stack rather than a from-scratch driver.
 //!
 //! # Shape of a program
 //!
@@ -48,11 +47,29 @@
 //! Both are WPA2-PSK by default. WPA3-SAE and open networks are reachable
 //! through [`Akm`].
 //!
+//! # Features
+//!
+//! Each replaces more of the C substrate: `rust-net` (lwIP and the vendor
+//! adapter out, smoltcp in), `embassy-net` (the MAC as an
+//! `embassy_net_driver::Driver`, for an application that brings its own
+//! stack), `rust-crypto` (wpa_supplicant's hashes, HMAC and AES from
+//! RustCrypto), `rust-rtos` (the `rtos_*` layer the blobs call), and
+//! `usb-console`.
+//!
 //! # Threading
 //!
 //! Everything on `Wifi` blocks the calling task by polling an event latch;
 //! none of it may be called from an interrupt or from an
 //! [`event::set_handler`] callback, which runs with the scheduler suspended.
+//!
+//! Two consequences for an application built on [`embassy_rt`]:
+//!
+//! * **Do the vendor bring-up before starting the executor.** A call into the
+//!   vendor stack from inside `executor.poll()` blocks with no timeout.
+//! * **Size the task stack for what the application puts on it.** The default
+//!   suits small locals; large socket buffers overrun it silently, and the
+//!   radio fails some time later as the corruption spreads. See
+//!   [`main!`] and [`runtime::start_with_stack`].
 
 pub use bl616_wifi_sys as sys;
 
@@ -70,7 +87,7 @@ pub mod shell;
 pub mod sta;
 
 /// Rust implementation of the vendor stack's network interface, replacing
-/// lwIP. See the module docs and the engineering notes for what is done and what is not.
+/// lwIP. See the module docs for what is done and what is not.
 #[cfg(feature = "rust-net")]
 // Linked for its C ABI exports alone: wpa_supplicant calls them, nothing in
 // Rust does.

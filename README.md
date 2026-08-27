@@ -25,39 +25,27 @@ fn app() -> ! {
 }
 ```
 
-**Both modes are verified on hardware** (Sipeed M0S Dock). AP: a laptop
-associated over WPA2-PSK, took `192.168.4.2` from the on-board DHCP server,
-and pinged `192.168.4.1` 5/5 at ~2.9 ms. STA: joined a WPA2 network with a
-full EAPOL 1-4 handshake, took `192.168.87.22/24` by DHCP, answered 6/6 pings
-and held -48 dBm.
+**Verified on hardware** (Sipeed M0S Dock). As an AP a client associates over
+WPA2-PSK, takes an address from the on-board DHCP server and pings 10/10 at
+~4 ms; as a station it joins a WPA2 network, takes a lease and pings the
+gateway 72/72.
 
-`--features embassy-net` presents the MAC as an
-[embassy-net](https://github.com/embassy-rs/embassy) `Driver` instead, with a
-time driver over the FreeRTOS tick and an executor running as an ordinary
-task — the arrangement for an embassy application. Verified as an AP: a client
-associates, leases an address and pings 6/6. See `examples/embassy_ap.rs`.
+Features, each replacing more of the C substrate:
 
-`--features rust-rtos` replaces the vendor's RTOS adapter — the 31 functions
-and 12 priority constants the WiFi blobs use instead of calling FreeRTOS — with
-Rust. A full FreeRTOS replacement lives on the `stage3-rust-scheduler` branch;
-it links but does not boot, and the engineering notes says why.
+| Feature | What it does |
+|---|---|
+| `rust-net` | drops lwIP and the vendor adapter (4.1 MB of C); IP stack in Rust over smoltcp, with its own DHCP server |
+| `embassy-net` | presents the MAC as an [embassy-net](https://github.com/embassy-rs/embassy) `Driver`, with a time driver over the FreeRTOS tick and an executor running as an ordinary task; the application brings its own stack |
+| `rust-crypto` | wpa_supplicant's hashing, HMAC and AES from RustCrypto, so the WPA2 handshake runs on Rust code |
+| `rust-rtos` | the 31 functions and 12 priority constants the blobs use instead of calling FreeRTOS |
+| `usb-console` | console on the chip's USB peripheral rather than UART0 |
 
-`--features rust-crypto` replaces wpa_supplicant's hashing, HMAC and AES
-backend with RustCrypto, so the WPA2 handshake runs on Rust code. Verified on
-hardware and covered by 28 host tests against published vectors. WPA3's
-elliptic-curve layer stays on mbedTLS — see the engineering notes.
-
-`--features rust-net` goes further: it drops lwIP and the vendor's network
-adapter (4.1 MB of C) and runs the IP stack in Rust over smoltcp, with a DHCP
-server of its own. Verified on hardware in both modes. As an **AP**, a client
-associates, leases `192.168.4.2` and pings 6/6. As a **station**, it joins a
-WPA2 network, takes a DHCP lease from the router, and pings the gateway
-70/70 at ~10 ms.
+A full FreeRTOS replacement lives on the `stage3-rust-scheduler` branch: it
+links but does not boot. WPA3's elliptic-curve layer stays on mbedTLS.
 
 This is a safe Rust surface over Bouffalo's WiFi stack, not a from-scratch
-driver — the 802.11 MAC and PHY ship only as blobs. the engineering notes is
-the engineering record: what is open, what is not, the ABI traps, and the
-roadmap toward a purer-Rust crate.
+driver — the 802.11 MAC and PHY ship only as blobs. What is open, what is
+not, and what it costs are covered below.
 
 ## Setup
 
@@ -149,29 +137,28 @@ bl616_wifi::event::set_handler(|event, value| println!("[event] {event:?} ({valu
 
 `hello` and `bringup` are bring-up instruments, not toys. If a board runs
 `hello` but not `ap`, the fault is in the radio path; `bringup` then names the
-exact call that fails. See "Debugging lessons" in the engineering notes — in
-particular that a running BL616 does *not* answer as `349b:6160`, and that you
+exact call that fails. Note that a running BL616 does *not* answer as `349b:6160`, and that you
 must read the CDC console with plain `cat` plus
 `stty -F /dev/ttyACM0 -echo` — *without* a baud rate, which wedges the port
 and makes a healthy board look dead.
 
 ## Using it from your own crate
 
-`cargo:rustc-link-arg` only applies to the package that emitted it, so any
-crate producing a BL616 binary needs this `build.rs`:
+`cargo:rustc-link-arg` does not cross package boundaries, so a crate that
+links its own BL616 firmware has to replay the vendor link line itself:
 
 ```rust
+// build.rs
 fn main() {
-    let path = std::env::var("DEP_BL616_WIFI_CSDK_LINK_ARGS").unwrap();
-    for arg in std::fs::read_to_string(path).unwrap().lines() {
-        println!("cargo:rustc-link-arg={arg}");
-    }
+    bl616_link::emit();
 }
 ```
 
-That variable comes from `bl616-wifi-sys`'s `links` metadata, so depend on
-**both** `bl616-wifi` and `bl616-wifi-sys`, and copy
-[`.cargo/config.toml`](.cargo/config.toml) across.
+`bl616-link` needs `bl616-wifi-sys` as a **direct** dependency — cargo hands
+`DEP_*` metadata only to direct dependents of the crate declaring `links` —
+and [`.cargo/config.toml`](.cargo/config.toml) has to be copied across for the
+target and linker settings. Without the `build.rs` the build succeeds and
+produces an ELF that is not firmware.
 
 ## Layout
 
@@ -179,12 +166,14 @@ That variable comes from `bl616-wifi-sys`'s `links` metadata, so depend on
 bl616-wifi/        the crate you use, plus examples/
 bl616-wifi-sys/    hand-written FFI; build.rs drives the C build and replays the link
   csdk/            a BouffaloSDK project: defconfig, FreeRTOSConfig.h, lwipopts
+bl616-crypto/      wpa_supplicant's crypto backend over RustCrypto
+bl616-dhcp/        DHCP server wire format, free of any stack
+bl616-link/        build-script support: replay the link line into a binary
 xtask/             build / image / flash / setup
-the engineering notes            engineering record and roadmap
 ```
 
 ## Licensing
 
 GPL-3.0-or-later. The Bouffalo archives it links against are not
 GPL-compatible: **source is fine, binaries are not redistributable.** Build
-locally. See the engineering notes.
+locally.

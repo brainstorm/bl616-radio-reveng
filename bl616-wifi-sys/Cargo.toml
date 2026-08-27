@@ -31,7 +31,7 @@ usb-console = []
 # Drop lwIP and the vendor's lwIP-based net_al adapter from the link, so a
 # Rust network stack can provide those entry points instead. Nothing supplies
 # them yet, so this currently fails the link on purpose: the error list *is*
-# the specification. See the engineering notes, "Stage 1".
+# the specification.
 rust-net = []
 
 [build-dependencies]

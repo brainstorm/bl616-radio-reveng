@@ -6,9 +6,9 @@
 
 use bl616_crypto::{crypto_dh_init, crypto_mod_exp};
 
-/// The supplicant's RNG, which the crate calls but does not provide. A test
-/// binary has to stand in for it; a counter is fine here because none of
-/// these tests depend on the values being unpredictable.
+/// The supplicant's RNG, which the crate calls but does not provide. A
+/// counter is fine here: nothing below depends on the values being
+/// unpredictable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn os_get_random(buf: *mut u8, len: usize) -> i32 {
     let s = unsafe { core::slice::from_raw_parts_mut(buf, len) };
@@ -55,36 +55,28 @@ const GROUP5_PRIME: &str = "
     83655D23 DCA3AD96 1C62F356 208552BB 9ED52907 7096966D
     670C354E 4ABC9804 F1746C08 CA237327 FFFFFFFF FFFFFFFF";
 
+/// Textbook values, a base wider than the modulus (reduced rather than
+/// rejected), and the fixed-width zero-padded output the mbedTLS
+/// implementation gives -- callers size the buffer and expect that width.
 #[test]
-fn small_values_are_right() {
-    // The textbook example: 5^6 mod 23 = 8.
+fn modular_exponentiation() {
     assert_eq!(mod_exp(&[5], &[6], &[23], 1).unwrap(), vec![8]);
-    // 2^10 mod 1001 = 23.
     assert_eq!(mod_exp(&[2], &[10], &hex("03e9"), 2).unwrap(), hex("0017"));
     // An exponent of zero is one, whatever the base.
     assert_eq!(mod_exp(&hex("beef"), &[0], &[23], 1).unwrap(), vec![1]);
-}
-
-#[test]
-fn a_base_wider_than_the_modulus_is_reduced_not_rejected() {
     // 65535 mod 23 = 8, and 8^2 = 64 = 18 (mod 23).
     assert_eq!(mod_exp(&hex("ffff"), &[2], &[23], 1).unwrap(), vec![18]);
+    assert_eq!(mod_exp(&[5], &[6], &[23], 8).unwrap(), vec![0, 0, 0, 0, 0, 0, 0, 8]);
 }
 
+/// A buffer too small for the value is an error, not a truncation. An even
+/// modulus is refused: Montgomery arithmetic needs an odd one, every real
+/// caller passes a DH or RSA modulus, and a wrong answer would be worse.
 #[test]
-fn the_result_is_left_padded_to_the_buffer_it_was_given() {
-    // mbedtls_mpi_write_binary writes the full width, zero-padded, and this
-    // has to match: callers size the buffer and expect a fixed-width answer.
-    let out = mod_exp(&[5], &[6], &[23], 8).unwrap();
-    assert_eq!(out, vec![0, 0, 0, 0, 0, 0, 0, 8]);
-}
-
-#[test]
-fn a_buffer_too_small_for_the_value_is_an_error() {
-    // 2^10 mod 1001 = 23, which needs one byte; ask for zero.
+fn modexp_refusals() {
+    let m = hex("03e9");
     let mut out = [0u8; 1];
     let mut len = 0usize;
-    let m = hex("03e9");
     let rc = unsafe {
         crypto_mod_exp(
             [2u8].as_ptr(),
@@ -98,28 +90,21 @@ fn a_buffer_too_small_for_the_value_is_an_error() {
         )
     };
     assert_eq!(rc, -1);
-}
 
-#[test]
-fn an_even_modulus_is_refused_rather_than_answered_wrongly() {
-    // Montgomery arithmetic needs an odd modulus. Every real caller passes a
-    // DH or RSA modulus, which is odd; a wrong answer would be worse than a
-    // refusal.
     assert!(mod_exp(&[5], &[6], &[24], 1).is_none());
 }
 
+/// `(g^a)^b == (g^b)^a`, which is the whole point.
 #[test]
-fn a_diffie_hellman_exchange_agrees_on_both_sides() {
+fn diffie_hellman_exchange() {
     let p = hex(GROUP5_PRIME);
-    let g = [2u8];
     let a = hex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff");
     let b = hex("fedcba98765432100123456789abcdeffedcba98765432100123456789abcdef");
 
-    let big_a = mod_exp(&g, &a, &p, p.len()).unwrap();
-    let big_b = mod_exp(&g, &b, &p, p.len()).unwrap();
+    let big_a = mod_exp(&[2], &a, &p, p.len()).unwrap();
+    let big_b = mod_exp(&[2], &b, &p, p.len()).unwrap();
     assert_ne!(big_a, big_b);
 
-    // (g^a)^b == (g^b)^a, which is the whole point.
     let secret_1 = mod_exp(&big_a, &b, &p, p.len()).unwrap();
     let secret_2 = mod_exp(&big_b, &a, &p, p.len()).unwrap();
     assert_eq!(secret_1, secret_2);
@@ -127,40 +112,32 @@ fn a_diffie_hellman_exchange_agrees_on_both_sides() {
     assert!(secret_1.iter().any(|&x| x != 0), "not a degenerate zero");
 }
 
+/// The public value is exactly `g^priv mod p`, and the private value stays
+/// below the prime -- the C clears the top byte when it compares greater, so
+/// the second case uses a prime starting low enough to take that path.
 #[test]
-fn dh_init_returns_a_public_value_matching_its_private_one() {
+fn dh_init() {
     let p = hex(GROUP5_PRIME);
     let mut privkey = vec![0u8; p.len()];
     let mut pubkey = vec![0u8; p.len()];
+    let rc =
+        unsafe { crypto_dh_init(2, p.as_ptr(), p.len(), privkey.as_mut_ptr(), pubkey.as_mut_ptr()) };
+    assert_eq!(rc, 0);
+    assert!(privkey.iter().any(|&x| x != 0));
+    assert_eq!(pubkey, mod_exp(&[2], &privkey, &p, p.len()).unwrap());
 
+    let low = hex("0100000000000000000000000000000000000000000000000000000000000003");
+    let mut privkey = vec![0u8; low.len()];
+    let mut pubkey = vec![0u8; low.len()];
     let rc = unsafe {
-        crypto_dh_init(2, p.as_ptr(), p.len(), privkey.as_mut_ptr(), pubkey.as_mut_ptr())
+        crypto_dh_init(2, low.as_ptr(), low.len(), privkey.as_mut_ptr(), pubkey.as_mut_ptr())
     };
     assert_eq!(rc, 0);
-    assert!(privkey.iter().any(|&x| x != 0), "a private key was chosen");
-
-    // The public value must be exactly g^priv mod p.
-    let expected = mod_exp(&[2], &privkey, &p, p.len()).unwrap();
-    assert_eq!(pubkey, expected);
+    assert!(privkey[..] < low[..]);
 }
 
 #[test]
-fn dh_init_keeps_the_private_value_below_the_prime() {
-    // The C clears the top byte when the random value compares greater than
-    // the prime. Group 5 starts with 0xFF, so a random value rarely trips it;
-    // use a prime that starts low so the path is actually taken.
-    let p = hex("0100000000000000000000000000000000000000000000000000000000000003");
-    let mut privkey = vec![0u8; p.len()];
-    let mut pubkey = vec![0u8; p.len()];
-    let rc = unsafe {
-        crypto_dh_init(2, p.as_ptr(), p.len(), privkey.as_mut_ptr(), pubkey.as_mut_ptr())
-    };
-    assert_eq!(rc, 0);
-    assert!(privkey[..] < p[..], "private value must be below the prime");
-}
-
-#[test]
-fn null_arguments_are_errors_not_crashes() {
+fn null_arguments() {
     let mut out = [0u8; 4];
     let mut len = 4usize;
     let rc = unsafe {
@@ -176,8 +153,8 @@ fn null_arguments_are_errors_not_crashes() {
         )
     };
     assert_eq!(rc, -1);
-    let rc = unsafe {
-        crypto_dh_init(2, core::ptr::null(), 0, out.as_mut_ptr(), out.as_mut_ptr())
-    };
-    assert_eq!(rc, -1);
+    assert_eq!(
+        unsafe { crypto_dh_init(2, core::ptr::null(), 0, out.as_mut_ptr(), out.as_mut_ptr()) },
+        -1
+    );
 }

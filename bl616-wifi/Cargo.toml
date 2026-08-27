@@ -56,7 +56,7 @@ panic-handler = []
 # Console over USB-CDC on the chip's own USB peripheral rather than UART0.
 usb-console = ["bl616-wifi-sys/usb-console"]
 # Stage 1 of the pure-Rust roadmap: drop lwIP and the vendor net_al adapter so
-# a Rust stack can replace them. Does not link yet -- see the engineering notes.
+# a Rust stack can replace them. Does not link yet.
 # Drop lwIP and the vendor network adapter and provide `net_al` in Rust. No
 # IP stack of its own -- that is the caller's choice below.
 rust-net-core = ["bl616-wifi-sys/rust-net", "alloc"]

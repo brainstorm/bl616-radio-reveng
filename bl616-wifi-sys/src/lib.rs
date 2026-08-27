@@ -32,7 +32,7 @@
 //! Proprietary, redistributed as prebuilt archives inside BouffaloSDK:
 //! `libfhost_bl616_default.a` (WiFi manager + fully-hosted control path),
 //! `libmacsw_bl616.a` (802.11 MAC), `libwl80211_bl616.a`, and
-//! `libbl616_phyrf.a` (PHY/RF). See the engineering notes for the licensing consequences.
+//! `libbl616_phyrf.a` (PHY/RF). See the README for the licensing consequences.
 //!
 //! [`bl616-wifi`]: https://docs.rs/bl616-wifi
 
