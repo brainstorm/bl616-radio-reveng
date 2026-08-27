@@ -89,6 +89,9 @@ embassy-net = [
     "dep:critical-section",
 ]
 
+[build-dependencies]
+bl616-link = { path = "../bl616-link" }
+
 [dev-dependencies]
 # Only the embassy example needs these; the crate itself exposes a Driver and
 # leaves the stack to the application.

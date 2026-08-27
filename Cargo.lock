@@ -87,11 +87,16 @@ name = "bl616-dhcp"
 version = "0.1.0"
 
 [[package]]
+name = "bl616-link"
+version = "0.1.0"
+
+[[package]]
 name = "bl616-wifi"
 version = "0.1.0"
 dependencies = [
  "bl616-crypto",
  "bl616-dhcp",
+ "bl616-link",
  "bl616-wifi-sys",
  "critical-section",
  "embassy-executor",
