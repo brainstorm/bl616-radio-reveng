@@ -12,7 +12,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
-    /// [`crate::Wifi::init`] was called more than once.
+    /// Something that may exist once was claimed twice: [`crate::Wifi::init`]
+    /// called again, or a second [`crate::uart::Uart`] while one is open.
     AlreadyInitialised,
     /// A parameter did not fit the vendor stack's limits — an SSID longer
     /// than 32 bytes, a passphrase longer than 63, a NUL byte in either.
@@ -37,7 +38,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::AlreadyInitialised => f.write_str("WiFi already initialised"),
+            Error::AlreadyInitialised => f.write_str("already initialised"),
             Error::InvalidArgument => f.write_str("invalid argument"),
             Error::Timeout => f.write_str("timed out waiting for the WiFi stack"),
             Error::RfInit(rc) => {

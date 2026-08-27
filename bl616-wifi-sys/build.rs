@@ -713,6 +713,13 @@ const LAYOUT_CHECKS: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "DEVICE",
+        "struct bflb_device_s",
+        &[
+            "name", "reg_base", "irq_num", "idx", "sub_idx", "dev_type", "user_data",
+        ],
+    ),
+    (
         "ASYNC_EVENT",
         "struct async_input_event",
         &["entry", "type", "finish", "size", "code", "value"],

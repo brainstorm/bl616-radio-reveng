@@ -64,7 +64,10 @@ pub struct bflb_uart_config_s {
 
 /// `UART_DIRECTION_TXRX`.
 pub const UART_DIRECTION_TXRX: u8 = 3;
-/// `UART_DATA_BITS_8`.
+/// `UART_DATA_BITS_5` .. `_8`.
+pub const UART_DATA_BITS_5: u8 = 0;
+pub const UART_DATA_BITS_6: u8 = 1;
+pub const UART_DATA_BITS_7: u8 = 2;
 pub const UART_DATA_BITS_8: u8 = 3;
 /// `UART_STOP_BITS_1`.
 pub const UART_STOP_BITS_1: u8 = 1;
@@ -77,11 +80,45 @@ pub const UART_PARITY_EVEN: u8 = 2;
 /// `UART_FLOWCTRL_NONE`.
 pub const UART_FLOWCTRL_NONE: u8 = 0;
 
-/// Opaque LHAL device handle.
+// Interrupt status bits, as `bflb_uart_get_intstatus` reports them. The two
+// FIFO bits are level-triggered on the FIFO count and have no `INTCLR` bit:
+// they are cleared by draining the receive FIFO or filling the transmit one,
+// which is why a handler that has nothing left to send has to mask instead.
+/// `UART_INTSTS_TX_FIFO`: the transmit FIFO fell below its threshold.
+pub const UART_INTSTS_TX_FIFO: u32 = 1 << 2;
+/// `UART_INTSTS_RX_FIFO`: the receive FIFO reached its threshold.
+pub const UART_INTSTS_RX_FIFO: u32 = 1 << 3;
+/// `UART_INTSTS_RTO`: the line went idle with bytes still in the receive
+/// FIFO, which is what delivers a short burst that never reaches threshold.
+pub const UART_INTSTS_RTO: u32 = 1 << 4;
+/// `UART_INTCLR_RTO`.
+pub const UART_INTCLR_RTO: u32 = 1 << 4;
+/// `UART_CMD_SET_RTO_VALUE`, in bit periods.
+pub const UART_CMD_SET_RTO_VALUE: c_int = 0x07;
+
+/// `GPIO_UART_FUNC_UART0_TX` / `_RX`, the UART0 signals a pin can carry.
+pub const GPIO_UART_FUNC_UART0_TX: u8 = 2;
+pub const GPIO_UART_FUNC_UART0_RX: u8 = 3;
+
+/// `struct bflb_device_s`, the LHAL device handle.
+///
+/// Not opaque, because the interrupt path needs `irq_num`: the SDK hands out
+/// one of these per peripheral and the IRQ number to attach a handler to is
+/// inside it. Layout checked against the header like the others.
 #[repr(C)]
 pub struct bflb_device_s {
-    _opaque: [u8; 0],
+    pub name: *const c_char,
+    pub reg_base: u32,
+    pub irq_num: u8,
+    pub idx: u8,
+    pub sub_idx: u8,
+    pub dev_type: u8,
+    pub user_data: *mut c_void,
 }
+
+/// `irq_callback`. Two bytes of `#ifdef` in `bflb_irq.h` pick between two
+/// signatures; BouffaloSDK does not define `BL_IOT_SDK`, so it is this one.
+pub type irq_callback = Option<unsafe extern "C" fn(irq: c_int, arg: *mut c_void)>;
 
 // -------------------------------------------------------------- event system
 
@@ -218,6 +255,34 @@ unsafe extern "C" {
     /// Blocks until every byte is in the transmit FIFO.
     pub fn bflb_uart_put_block(dev: *mut bflb_device_s, data: *mut u8, len: u32) -> c_int;
     pub fn bflb_uart_rxavailable(dev: *mut bflb_device_s) -> bool;
+    /// Returns 0 once the byte is in the transmit FIFO, without waiting for
+    /// the line. Check [`bflb_uart_txready`] first.
+    pub fn bflb_uart_putchar(dev: *mut bflb_device_s, ch: c_int) -> c_int;
+    /// Whether the transmit FIFO has room for another byte.
+    pub fn bflb_uart_txready(dev: *mut bflb_device_s) -> bool;
+    /// Unmask (`false`) or mask (`true`) the transmit FIFO interrupt.
+    pub fn bflb_uart_txint_mask(dev: *mut bflb_device_s, mask: bool);
+    /// Unmask (`false`) or mask (`true`) the receive FIFO and receive-timeout
+    /// interrupts together.
+    pub fn bflb_uart_rxint_mask(dev: *mut bflb_device_s, mask: bool);
+    pub fn bflb_uart_get_intstatus(dev: *mut bflb_device_s) -> u32;
+    pub fn bflb_uart_int_clear(dev: *mut bflb_device_s, int_clear: u32);
+    pub fn bflb_uart_feature_control(dev: *mut bflb_device_s, cmd: c_int, arg: usize) -> c_int;
+
+    // --- Interrupts. The SDK owns the vector table; attaching here is what
+    // every vendor example does, and the trap entry that dispatches to it is
+    // the same one `TrapNetCounter` counts.
+    pub fn bflb_irq_attach(irq: c_int, isr: irq_callback, arg: *mut c_void) -> c_int;
+    pub fn bflb_irq_detach(irq: c_int) -> c_int;
+    pub fn bflb_irq_enable(irq: c_int);
+    pub fn bflb_irq_disable(irq: c_int);
+    /// Disable interrupts and return the previous `mstatus`.
+    pub fn bflb_irq_save() -> usize;
+    pub fn bflb_irq_restore(flags: usize);
+
+    // --- GPIO
+    /// Route `pin` to a UART signal, e.g. [`GPIO_UART_FUNC_UART0_RX`].
+    pub fn bflb_gpio_uart_init(dev: *mut bflb_device_s, pin: u8, uart_func: u8);
 
     // --- C runtime, as provided by the SDK's allocator
     pub fn malloc(size: usize) -> *mut c_void;
@@ -478,6 +543,19 @@ check!(
     flow_ctrl => UART_CONFIG_OFF_FLOW_CTRL,
     tx_fifo_threshold => UART_CONFIG_OFF_TX_FIFO_THRESHOLD,
     rx_fifo_threshold => UART_CONFIG_OFF_RX_FIFO_THRESHOLD,
+);
+
+check!(
+    bflb_device_s,
+    DEVICE_SIZE,
+    DEVICE_ALIGN,
+    name => DEVICE_OFF_NAME,
+    reg_base => DEVICE_OFF_REG_BASE,
+    irq_num => DEVICE_OFF_IRQ_NUM,
+    idx => DEVICE_OFF_IDX,
+    sub_idx => DEVICE_OFF_SUB_IDX,
+    dev_type => DEVICE_OFF_DEV_TYPE,
+    user_data => DEVICE_OFF_USER_DATA,
 );
 
 check!(
