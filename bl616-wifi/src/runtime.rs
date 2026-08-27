@@ -215,6 +215,17 @@ unsafe extern "C" fn radio_task(_arg: *mut c_void) {
 }
 
 unsafe extern "C" fn app_task(arg: *mut c_void) {
+    // The same wait `radio_task` does, and for the same reason: a USB-CDC
+    // console discards everything written before the host enumerates it. This
+    // task starts at t=0, so without the wait its first prints -- including
+    // whatever it says when bring-up fails -- are gone before any terminal
+    // attaches, and the application looks silent rather than broken.
+    //
+    // It cannot live in `start`, which runs before the scheduler and so has
+    // no way to sleep.
+    #[cfg(feature = "usb-console")]
+    delay_ms(CONSOLE_SETTLE_MS);
+
     let app: fn() -> ! = unsafe { core::mem::transmute(arg) };
     app()
 }
