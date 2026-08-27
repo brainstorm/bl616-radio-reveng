@@ -705,6 +705,14 @@ const LAYOUT_CHECKS: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "UART_CONFIG",
+        "struct bflb_uart_config_s",
+        &[
+            "baudrate", "direction", "data_bits", "stop_bits", "parity", "bit_order",
+            "flow_ctrl", "tx_fifo_threshold", "rx_fifo_threshold",
+        ],
+    ),
+    (
         "ASYNC_EVENT",
         "struct async_input_event",
         &["entry", "type", "finish", "size", "code", "value"],

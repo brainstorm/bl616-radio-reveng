@@ -46,6 +46,37 @@ pub type TaskFunction_t = Option<unsafe extern "C" fn(arg: *mut c_void)>;
 /// `eNotifyAction`. One byte, because of `-fshort-enums`.
 pub type eNotifyAction = u8;
 
+/// `bflb_uart_config_s`. Passed to `bflb_uart_init` by pointer, so the layout
+/// is checked against the header by `build.rs` like the others.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct bflb_uart_config_s {
+    pub baudrate: u32,
+    pub direction: u8,
+    pub data_bits: u8,
+    pub stop_bits: u8,
+    pub parity: u8,
+    pub bit_order: u8,
+    pub flow_ctrl: u8,
+    pub tx_fifo_threshold: u8,
+    pub rx_fifo_threshold: u8,
+}
+
+/// `UART_DIRECTION_TXRX`.
+pub const UART_DIRECTION_TXRX: u8 = 3;
+/// `UART_DATA_BITS_8`.
+pub const UART_DATA_BITS_8: u8 = 3;
+/// `UART_STOP_BITS_1`.
+pub const UART_STOP_BITS_1: u8 = 1;
+/// `UART_STOP_BITS_2`.
+pub const UART_STOP_BITS_2: u8 = 3;
+/// `UART_PARITY_NONE`, `_ODD`, `_EVEN`.
+pub const UART_PARITY_NONE: u8 = 0;
+pub const UART_PARITY_ODD: u8 = 1;
+pub const UART_PARITY_EVEN: u8 = 2;
+/// `UART_FLOWCTRL_NONE`.
+pub const UART_FLOWCTRL_NONE: u8 = 0;
+
 /// Opaque LHAL device handle.
 #[repr(C)]
 pub struct bflb_device_s {
@@ -178,6 +209,15 @@ unsafe extern "C" {
     /// Reset the whole SoC, peripherals included, and start again from the
     /// boot ROM. Does not return.
     pub fn GLB_SW_System_Reset();
+
+    // --- UART
+    pub fn bflb_uart_init(dev: *mut bflb_device_s, config: *const bflb_uart_config_s);
+    pub fn bflb_uart_deinit(dev: *mut bflb_device_s);
+    /// Returns the byte, or -1 when the receive FIFO is empty.
+    pub fn bflb_uart_getchar(dev: *mut bflb_device_s) -> c_int;
+    /// Blocks until every byte is in the transmit FIFO.
+    pub fn bflb_uart_put_block(dev: *mut bflb_device_s, data: *mut u8, len: u32) -> c_int;
+    pub fn bflb_uart_rxavailable(dev: *mut bflb_device_s) -> bool;
 
     // --- C runtime, as provided by the SDK's allocator
     pub fn malloc(size: usize) -> *mut c_void;
@@ -423,6 +463,21 @@ check!(
     passive => SCAN_PARAMS_OFF_PASSIVE,
     extra_ies => SCAN_PARAMS_OFF_EXTRA_IES,
     extra_ies_len => SCAN_PARAMS_OFF_EXTRA_IES_LEN,
+);
+
+check!(
+    bflb_uart_config_s,
+    UART_CONFIG_SIZE,
+    UART_CONFIG_ALIGN,
+    baudrate => UART_CONFIG_OFF_BAUDRATE,
+    direction => UART_CONFIG_OFF_DIRECTION,
+    data_bits => UART_CONFIG_OFF_DATA_BITS,
+    stop_bits => UART_CONFIG_OFF_STOP_BITS,
+    parity => UART_CONFIG_OFF_PARITY,
+    bit_order => UART_CONFIG_OFF_BIT_ORDER,
+    flow_ctrl => UART_CONFIG_OFF_FLOW_CTRL,
+    tx_fifo_threshold => UART_CONFIG_OFF_TX_FIFO_THRESHOLD,
+    rx_fifo_threshold => UART_CONFIG_OFF_RX_FIFO_THRESHOLD,
 );
 
 check!(

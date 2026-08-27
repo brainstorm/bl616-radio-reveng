@@ -27,6 +27,9 @@ pub enum Error {
     ConnectionFailed,
     /// Associated, but no DHCP lease arrived before the deadline.
     DhcpTimeout,
+    /// The SDK does not know a device by that name, which means
+    /// `board_init()` has not run or the peripheral is not built in.
+    NotFound,
     /// The vendor call returned a non-zero status.
     Vendor(i32),
 }
@@ -42,6 +45,7 @@ impl fmt::Display for Error {
             }
             Error::ConnectionFailed => f.write_str("association failed"),
             Error::DhcpTimeout => f.write_str("DHCP timed out"),
+            Error::NotFound => write!(f, "no such device (board_init not run?)"),
             Error::Vendor(rc) => write!(f, "vendor call failed ({rc})"),
         }
     }
