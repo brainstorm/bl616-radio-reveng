@@ -22,7 +22,7 @@ bl616-crypto = { path = "../bl616-crypto", optional = true }
 # do not pull any of this in.
 embassy-net-driver = { version = "0.2", optional = true }
 embassy-time-driver = { version = "0.2", optional = true, features = ["tick-hz-1_000"] }
-embassy-time-queue-utils = { version = "0.1", optional = true, features = ["generic-queue-32"] }
+embassy-time-queue-utils = { version = "0.3", optional = true, features = ["generic-queue-32"] }
 critical-section = { version = "1", optional = true, features = ["restore-state-bool"] }
 embassy-sync = { version = "0.8", optional = true }
 # No arch feature: the stock riscv32 executor parks the hart in WFI, which is

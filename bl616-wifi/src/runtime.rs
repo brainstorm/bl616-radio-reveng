@@ -236,6 +236,20 @@ pub fn delay_ms(ms: u32) {
     unsafe { sys::vTaskDelay(ms_to_ticks(ms) as _) }
 }
 
+/// Restart the chip.
+///
+/// A full system reset rather than a CPU-only one: the radio and the USB
+/// peripheral hold state that a CPU reset leaves behind, and coming back up
+/// with a half-initialised MAC is harder to diagnose than a clean boot.
+pub fn reset() -> ! {
+    unsafe { sys::GLB_SW_System_Reset() };
+    // The reset is not instantaneous; do not let execution run on into
+    // whatever follows.
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 /// Milliseconds since the scheduler started.
 pub fn uptime_ms() -> u64 {
     unsafe { sys::xTaskGetTickCount() as u64 * 1000 / TICK_RATE_HZ as u64 }

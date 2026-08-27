@@ -166,6 +166,19 @@ unsafe extern "C" {
     /// number.
     pub fn bflb_trng_readlen(data: *mut u8, len: u32) -> c_int;
 
+    // --- SPI flash, for anything that has to survive a reboot.
+    //
+    // Addresses are offsets into the flash, not memory addresses; erase works
+    // in sectors and write cannot clear a bit, which is the usual NOR
+    // contract.
+    pub fn bflb_flash_read(addr: u32, data: *mut u8, len: u32) -> c_int;
+    pub fn bflb_flash_write(addr: u32, data: *const u8, len: u32) -> c_int;
+    pub fn bflb_flash_erase(addr: u32, len: u32) -> c_int;
+
+    /// Reset the whole SoC, peripherals included, and start again from the
+    /// boot ROM. Does not return.
+    pub fn GLB_SW_System_Reset();
+
     // --- C runtime, as provided by the SDK's allocator
     pub fn malloc(size: usize) -> *mut c_void;
     pub fn free(ptr: *mut c_void);
