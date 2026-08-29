@@ -268,6 +268,19 @@ fn cmd_monitor(args: &[String]) -> Result<(), String> {
     };
     let baud = flag(args, "--baud").unwrap_or_else(|| DEFAULT_BAUD.into());
 
+    // Put the line discipline in raw mode with echo off before anything
+    // opens the port. A terminal left echoing sends the board's own output
+    // straight back to it, the vendor CLI on the other end echoes that in
+    // turn, and the two saturate the link between them -- tens of thousands
+    // of characters a second of nothing, drowning the log that was wanted.
+    // picocom and screen do this for themselves; `cat` does not, and that is
+    // what people reach for.
+    if which("stty").is_some() {
+        let _ = Command::new("stty")
+            .args(["-F", &port, "raw", "-echo"])
+            .status();
+    }
+
     // Console output is on UART0 (GPIO 21 TX / 22 RX) unless the firmware was
     // built with the usb-console feature, in which case it is on the same
     // USB-C port used for flashing.
@@ -282,9 +295,10 @@ fn cmd_monitor(args: &[String]) -> Result<(), String> {
         }
     }
 
+    // The port is already raw with echo off, so a bare `cat` is safe here.
     Err(format!(
         "no terminal program found. Install picocom, or run:\n  \
-         screen {port} {baud}"
+         stty -F {port} raw -echo {baud} && cat {port}"
     ))
 }
 
