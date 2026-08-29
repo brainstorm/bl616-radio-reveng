@@ -92,6 +92,25 @@ pub fn emit() {
         println!("cargo:rustc-link-arg={arg}");
     }
 
+    // Put `bl616_wifi::console`'s lock in front of every console write in
+    // the firmware, the vendor's own included. Without it two tasks writing
+    // at once interleave by the character: the SDK's implementation takes no
+    // lock and keeps its CRLF state in a global. The anchor is needed for
+    // the same reason as the exports below — nothing in Rust calls the
+    // wrapper, so `--gc-sections` would drop it and the link would fail
+    // looking for it.
+    println!("cargo:rustc-link-arg=-Wl,--wrap=bflb_console_write");
+    println!("cargo:rustc-link-arg=-Wl,--undefined=__wrap_bflb_console_write");
+
+    // The formatter above it is wrapped only for the probe, which uses it to
+    // record what the SDK's `printf` is asked to format. Ordinary builds
+    // leave it alone: measurement showed it is not on the console's hot path
+    // here, so interposing on it would cost a call and buy nothing.
+    if env::var_os("CARGO_FEATURE_CONSOLE_PROBE").is_some() {
+        println!("cargo:rustc-link-arg=-Wl,--wrap=console_vsnprintf");
+        println!("cargo:rustc-link-arg=-Wl,--undefined=__wrap_console_vsnprintf");
+    }
+
     if env::var_os("CARGO_FEATURE_RUST_NET").is_some() {
         for sym in NET_AL_EXPORTS {
             println!("cargo:rustc-link-arg=-Wl,--undefined={sym}");

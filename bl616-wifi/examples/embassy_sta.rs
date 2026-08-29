@@ -173,5 +173,7 @@ async fn net(stack: embassy_net::Stack<'static>) {
             runtime::uptime_ms() / 1000,
             runtime::free_heap()
         );
+        #[cfg(feature = "console-probe")]
+        bl616_wifi::console::probe_report();
     }
 }

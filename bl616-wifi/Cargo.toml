@@ -54,6 +54,10 @@ default = ["alloc", "panic-handler"]
 alloc = []
 # Provide a #[panic_handler] that prints to the console and halts.
 panic-handler = []
+# Count and shape every console write, and report it on demand. A bring-up
+# tool: it answers what is writing and in what sizes, which is not something
+# a capture on the host can tell you once the output is lossy.
+console-probe = []
 # Console over USB-CDC on the chip's own USB peripheral rather than UART0.
 usb-console = ["bl616-wifi-sys/usb-console"]
 # Stage 1 of the pure-Rust roadmap: drop lwIP and the vendor net_al adapter so

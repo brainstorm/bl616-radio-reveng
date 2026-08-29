@@ -62,6 +62,16 @@ pub struct bflb_uart_config_s {
     pub rx_fifo_threshold: u8,
 }
 
+/// `queueQUEUE_TYPE_MUTEX` and `queueQUEUE_TYPE_RECURSIVE_MUTEX`, which is
+/// what `xQueueCreateMutex` distinguishes them by.
+pub const QUEUE_TYPE_MUTEX: u8 = 1;
+pub const QUEUE_TYPE_RECURSIVE_MUTEX: u8 = 4;
+
+/// What `xTaskGetSchedulerState` returns.
+pub const TASK_SCHEDULER_SUSPENDED: BaseType_t = 0;
+pub const TASK_SCHEDULER_NOT_STARTED: BaseType_t = 1;
+pub const TASK_SCHEDULER_RUNNING: BaseType_t = 2;
+
 /// `UART_DIRECTION_TXRX`.
 pub const UART_DIRECTION_TXRX: u8 = 3;
 /// `UART_DATA_BITS_5` .. `_8`.
@@ -409,6 +419,8 @@ unsafe extern "C" {
         ucQueueType: u8,
     ) -> QueueHandle_t;
     pub fn xQueueCreateMutex(ucQueueType: u8) -> QueueHandle_t;
+    pub fn xQueueTakeMutexRecursive(xMutex: QueueHandle_t, xTicksToWait: TickType_t) -> BaseType_t;
+    pub fn xQueueGiveMutexRecursive(xMutex: QueueHandle_t) -> BaseType_t;
     pub fn xQueueCreateCountingSemaphore(
         uxMaxCount: UBaseType_t,
         uxInitialCount: UBaseType_t,
@@ -464,6 +476,30 @@ unsafe extern "C" {
     pub fn vTaskEnterCritical();
     pub fn vTaskExitCritical();
     pub fn xTaskGetTickCountFromISR() -> TickType_t;
+    /// [`TASK_SCHEDULER_SUSPENDED`], [`TASK_SCHEDULER_NOT_STARTED`] or
+    /// [`TASK_SCHEDULER_RUNNING`].
+    pub fn xTaskGetSchedulerState() -> BaseType_t;
+
+    /// The console write the linker's `--wrap` renamed out of the way.
+    ///
+    /// Every `printf` in the firmware, C and Rust alike, ends up here. The
+    /// SDK's own copy takes no lock and keeps the CRLF translation state in
+    /// a global, so two tasks writing at once interleave by the character;
+    /// `crate::console` supplies the `__wrap_` half that serialises them.
+    pub fn __real_bflb_console_write(data: *const c_void, size: usize) -> isize;
+
+    /// The formatter behind the vendor's `printf`, renamed by `--wrap` when
+    /// the `console-probe` feature asks for it.
+    ///
+    /// Only the probe uses it: measurement showed the SDK's `printf` is not
+    /// on the hot path of this firmware's console traffic, so wrapping it in
+    /// a production build would buy nothing. Recording which format strings
+    /// pass through here is how that was established.
+    ///
+    /// `args` is a `va_list`, opaque here and passed straight through; on
+    /// this ABI it is one pointer-sized value.
+    pub fn __real_console_vsnprintf(fmt: *const c_char, args: *mut c_void) -> c_int;
+
 }
 
 // --------------------------------------------------------- layout assertions
