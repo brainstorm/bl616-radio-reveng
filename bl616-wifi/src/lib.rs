@@ -80,6 +80,7 @@ pub mod error;
 pub mod event;
 pub mod net;
 pub mod flash;
+pub mod ota;
 pub mod rng;
 pub mod runtime;
 pub mod uart;

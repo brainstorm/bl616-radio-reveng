@@ -33,6 +33,8 @@ pub enum Error {
     NotFound,
     /// The vendor call returned a non-zero status.
     Vendor(i32),
+    /// The partition table could not be read, or an update to it refused.
+    Partition(bl616_pt::Error),
 }
 
 impl fmt::Display for Error {
@@ -48,6 +50,7 @@ impl fmt::Display for Error {
             Error::DhcpTimeout => f.write_str("DHCP timed out"),
             Error::NotFound => write!(f, "no such device (board_init not run?)"),
             Error::Vendor(rc) => write!(f, "vendor call failed ({rc})"),
+            Error::Partition(e) => write!(f, "partition table: {e:?}"),
         }
     }
 }

@@ -16,6 +16,7 @@ keywords = ["bl616", "bouffalo", "wifi", "riscv", "embedded"]
 [dependencies]
 bl616-wifi-sys = { path = "../bl616-wifi-sys", version = "0.1.0" }
 bl616-dhcp = { path = "../bl616-dhcp" }
+bl616-pt = { path = "../bl616-pt" }
 bl616-crypto = { path = "../bl616-crypto", optional = true }
 
 # The embassy front end. Optional: the default build and the smoltcp front end
