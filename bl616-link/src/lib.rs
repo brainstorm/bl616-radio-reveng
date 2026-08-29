@@ -109,6 +109,8 @@ pub fn emit() {
     if env::var_os("CARGO_FEATURE_CONSOLE_PROBE").is_some() {
         println!("cargo:rustc-link-arg=-Wl,--wrap=console_vsnprintf");
         println!("cargo:rustc-link-arg=-Wl,--undefined=__wrap_console_vsnprintf");
+        println!("cargo:rustc-link-arg=-Wl,--wrap=putchar");
+        println!("cargo:rustc-link-arg=-Wl,--undefined=__wrap_putchar");
     }
 
     if env::var_os("CARGO_FEATURE_RUST_NET").is_some() {

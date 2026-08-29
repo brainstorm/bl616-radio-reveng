@@ -178,6 +178,10 @@ mod probe {
     pub static BYTES: AtomicUsize = AtomicUsize::new(0);
     /// Writes whose shape did not fit the table.
     pub static OTHER: AtomicUsize = AtomicUsize::new(0);
+    /// Format strings that did not fit their table.
+    pub static FMTS_OTHER: AtomicUsize = AtomicUsize::new(0);
+    /// `putchar` calls whose byte did not fit its table.
+    pub static PUTC_OTHER: AtomicUsize = AtomicUsize::new(0);
 
     /// One remembered shape: the write's length, its first four bytes, and
     /// how often it has been seen. `len` of 0 means the slot is free.
@@ -288,6 +292,44 @@ fn probe_fmt(fmt: *const core::ffi::c_char) {
             return;
         }
     }
+    probe::FMTS_OTHER.fetch_add(1, Ordering::Relaxed);
+}
+
+/// How many times `putchar` was called, and with what.
+#[cfg(feature = "console-probe")]
+static PUTCHARS: [probe::Slot; PROBE_SLOTS] = [const { probe::Slot::NEW }; PROBE_SLOTS];
+
+/// `putchar`, counted and passed on.
+///
+/// # Safety
+///
+/// Called by the C library with its own argument, forwarded unchanged.
+#[cfg(feature = "console-probe")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __wrap_putchar(c: core::ffi::c_int) -> core::ffi::c_int {
+    use core::sync::atomic::Ordering;
+
+    // `len` is the byte here, so the report says which characters arrive.
+    let byte = (c & 0xff) as u32;
+    let mut placed = false;
+    for slot in &PUTCHARS {
+        if slot.len.load(Ordering::Relaxed) == byte + 1 {
+            slot.count.fetch_add(1, Ordering::Relaxed);
+            placed = true;
+            break;
+        }
+        if slot.len.load(Ordering::Relaxed) == 0 {
+            slot.len.store(byte + 1, Ordering::Relaxed);
+            slot.count.fetch_add(1, Ordering::Relaxed);
+            placed = true;
+            break;
+        }
+    }
+    if !placed {
+        probe::PUTC_OTHER.fetch_add(1, Ordering::Relaxed);
+    }
+    // SAFETY: forwarded to the implementation the caller wanted.
+    unsafe { sys::__real_putchar(c) }
 }
 
 /// Print what the probe has seen, and clear it.
@@ -301,6 +343,8 @@ pub fn probe_report() {
     let calls = probe::CALLS.swap(0, Ordering::Relaxed);
     let bytes = probe::BYTES.swap(0, Ordering::Relaxed);
     let other = probe::OTHER.swap(0, Ordering::Relaxed);
+    let fmts_other = probe::FMTS_OTHER.swap(0, Ordering::Relaxed);
+    let putc_other = probe::PUTC_OTHER.swap(0, Ordering::Relaxed);
 
     let mut shapes = [(0u32, [0u8; 4], 0u32); PROBE_SLOTS];
     for (out, slot) in shapes.iter_mut().zip(&PROBE) {
@@ -320,7 +364,26 @@ pub fn probe_report() {
         out.2 = slot.count.swap(0, Ordering::Relaxed);
     }
 
-    crate::println!("[probe] {calls} writes, {bytes} bytes, {other} unrecorded");
+    let mut putc = [(0u32, 0u32); PROBE_SLOTS];
+    for (out, slot) in putc.iter_mut().zip(&PUTCHARS) {
+        out.0 = slot.len.load(Ordering::Relaxed);
+        out.1 = slot.count.swap(0, Ordering::Relaxed);
+    }
+
+    // The overflow counts matter as much as the tables. A full table
+    // silently attributes everything to whatever claimed a slot first, and a
+    // reader who does not know that draws the wrong conclusion from the
+    // proportions -- which is exactly how this probe misled its author twice.
+    crate::println!(
+        "[probe] {calls} writes, {bytes} bytes, {other} unrecorded; \
+         {fmts_other} fmts and {putc_other} putchars over table"
+    );
+    for (byte, count) in putc {
+        if count == 0 {
+            continue;
+        }
+        crate::println!("[probe]   putchar {:#04x} x{count}", byte - 1);
+    }
     for (addr, head, count) in fmts {
         if count == 0 {
             continue;

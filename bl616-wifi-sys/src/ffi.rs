@@ -500,6 +500,13 @@ unsafe extern "C" {
     /// this ABI it is one pointer-sized value.
     pub fn __real_console_vsnprintf(fmt: *const c_char, args: *mut c_void) -> c_int;
 
+    /// `putchar`, renamed by `--wrap` for the probe.
+    ///
+    /// The one-byte console writes have to come from here — it is the only
+    /// caller of `bflb_console_write` with a single character — but "has to"
+    /// is not a measurement, and the callers the disassembler can see do not
+    /// explain the rate. Counting settles it.
+    pub fn __real_putchar(c: c_int) -> c_int;
 }
 
 // --------------------------------------------------------- layout assertions
